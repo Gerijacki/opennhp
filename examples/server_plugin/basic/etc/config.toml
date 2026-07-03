@@ -10,3 +10,10 @@ smtp_username = "${SMTP_USERNAME}"
 smtp_password = "${SMTP_PASSWORD}"
 smtp_from = "${SMTP_FROM}"
 smtp_subject = "${SMTP_SUBJECT}"
+
+# Require the OTP recipient email to match the claimed userId.
+# When true, RequestOTP rejects requests where UserData["email"] != userId,
+# preventing identity spoofing where an attacker supplies their own inbox
+# to register a key under someone else's userId. Real ASPs must also bind
+# identity through their IdP — this is the minimum check for the demo.
+require_email_match = true

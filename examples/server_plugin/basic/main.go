@@ -34,7 +34,8 @@ type config struct {
 	// RequireEmailMatch, when true, enforces that the email address
 	// supplied in UserData matches the claimed userId. This is the
 	// minimum identity-binding check for a demo deployment.
-	RequireEmailMatch bool `toml:"require_email_match"`
+	// Defaults to true when not explicitly set in config.
+	RequireEmailMatch *bool `toml:"require_email_match"`
 }
 
 var (
@@ -353,9 +354,9 @@ func ExportedData() *plugins.PluginParamsOut {
 // register a public key under any userId.
 //
 // This example plugin demonstrates the minimum check via the
-// RequireEmailMatch config option, which validates that the email matches
-// userId. For a real deployment, replace this with your identity provider's
-// verification.
+// RequireEmailMatch config option (default true), which validates that
+// the email matches userId. For a real deployment, replace this with
+// your identity provider's verification.
 func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper) error {
 	if helper == nil || helper.GenerateOTPFunc == nil {
 		return fmt.Errorf("RequestOTP: keystore helper not available")
@@ -380,9 +381,13 @@ func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper
 		log.Warning("RequestOTP: no email in UserData, using userId as email recipient")
 	}
 
-	// Identity-binding check: when RequireEmailMatch is set, reject
-	// requests where the email does not equal the claimed userId.
-	if baseConf != nil && baseConf.RequireEmailMatch && emailAddr != req.Msg.UserId {
+	// Identity-binding check: when enabled (default), reject requests
+	// where the email does not equal the claimed userId.
+	requireMatch := true // default
+	if baseConf != nil && baseConf.RequireEmailMatch != nil {
+		requireMatch = *baseConf.RequireEmailMatch
+	}
+	if requireMatch && emailAddr != req.Msg.UserId {
 		return fmt.Errorf("RequestOTP: email %s does not match userId %s", emailAddr, req.Msg.UserId)
 	}
 

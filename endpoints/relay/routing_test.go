@@ -27,6 +27,7 @@ func newRoutingTestServer(serverIDs ...string) *RelayServer {
 		}
 	}
 	return &RelayServer{
+		config:  &Config{},
 		servers: servers,
 	}
 }

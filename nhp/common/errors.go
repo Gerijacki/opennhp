@@ -145,6 +145,7 @@ var (
 	ErrAgentNotRegistered         = newError("56006", "agent not registered", "设备未注册")
 	ErrAgentKeyStoreError         = newError("56007", "agent key store operation failed", "密钥存储操作失败")
 	ErrOTPRateLimited             = newError("56008", "otp rate limited, too many attempts", "一次性验证码尝试次数过多，已锁定")
+	ErrOTPCooldown                = newError("56009", "otp request too frequent, please wait before requesting a new code", "验证码请求过于频繁，请稍后再试")
 
 	// db
 	ErrTEENotAuthorized        = newError("55001", "TEE is  not authorized", "可信执行环境未授权")

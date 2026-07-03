@@ -362,6 +362,26 @@ func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper
 		return fmt.Errorf("RequestOTP: keystore helper not available")
 	}
 
+	// Extract email from UserData.
+	to := req.Msg.UserData["email"]
+	emailAddr, ok := to.(string)
+	if !ok || emailAddr == "" {
+		emailAddr = req.Msg.UserId // fallback: use userId as email
+		log.Warning("RequestOTP: no email in UserData, using userId as email recipient")
+	}
+
+	// Identity-binding check: when enabled (default), reject requests
+	// where the email does not equal the claimed userId. This check runs
+	// BEFORE OTP generation so rejected requests have no side effects
+	// (no OTP state rotation, no email send).
+	requireMatch := true // default
+	if baseConf != nil && baseConf.RequireEmailMatch != nil {
+		requireMatch = *baseConf.RequireEmailMatch
+	}
+	if requireMatch && emailAddr != req.Msg.UserId {
+		return fmt.Errorf("RequestOTP: email %s does not match userId %s", emailAddr, req.Msg.UserId)
+	}
+
 	// Use server-configured OTP TTL (default 300s = 5 min).
 	ttl := helper.OTPTTLSeconds
 	if ttl <= 0 {
@@ -374,23 +394,6 @@ func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper
 	}
 
 	// Send OTP via email.
-	to := req.Msg.UserData["email"]
-	emailAddr, ok := to.(string)
-	if !ok || emailAddr == "" {
-		emailAddr = req.Msg.UserId // fallback: use userId as email
-		log.Warning("RequestOTP: no email in UserData, using userId as email recipient")
-	}
-
-	// Identity-binding check: when enabled (default), reject requests
-	// where the email does not equal the claimed userId.
-	requireMatch := true // default
-	if baseConf != nil && baseConf.RequireEmailMatch != nil {
-		requireMatch = *baseConf.RequireEmailMatch
-	}
-	if requireMatch && emailAddr != req.Msg.UserId {
-		return fmt.Errorf("RequestOTP: email %s does not match userId %s", emailAddr, req.Msg.UserId)
-	}
-
 	if err := sendOTPEmail(emailAddr, otpCode); err != nil {
 		log.Error("RequestOTP: send email failed: %v", err)
 		return err

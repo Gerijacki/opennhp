@@ -363,13 +363,14 @@ func TestValidateOTP_RateLimit(t *testing.T) {
 func TestGenerateOTP_InvalidatesPrevious(t *testing.T) {
 	s, _, _ := newTestStore(t)
 
-	code1, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	opts := OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute, CooldownSeconds: -1}
+	code1, err := s.GenerateOTP(opts)
 	if err != nil {
 		t.Fatalf("GenerateOTP 1: %v", err)
 	}
 
 	// Generate a second OTP for the same user+device — invalidates code1.
-	code2, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	code2, err := s.GenerateOTP(opts)
 	if err != nil {
 		t.Fatalf("GenerateOTP 2: %v", err)
 	}

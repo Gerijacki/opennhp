@@ -99,19 +99,54 @@ func (s *AgentKeyStore) migrate() error {
 
 // ── OTP operations ────────────────────────────────────────────────────────
 
+// OTPCooldownSeconds is the minimum interval between successive OTP
+// generations for the same user+device. A request that arrives before
+// the cooldown elapses is rejected with ErrOTPCooldown. This limits
+// email-flood and OTP-invalidation abuse from unauthenticated callers.
+const OTPCooldownSeconds int64 = 60
+
 // OTPParams holds the parameters for generating an OTP.
 type OTPParams struct {
 	UserId   string
 	DeviceId string
 	TTL      time.Duration // OTP validity period; defaults to 5 minutes if <= 0
+	// CooldownSeconds is the minimum interval between successive OTP
+	// generations for the same user+device. Zero means use the package
+	// default (OTPCooldownSeconds). A negative value disables the
+	// cooldown check entirely (intended for tests).
+	CooldownSeconds int64
 }
 
 // GenerateOTP creates a 6-digit random OTP, stores it in the database, and
 // returns the code. Previous unused OTPs for the same user+device are
 // invalidated.
+//
+// A per-(userId, deviceId) cooldown (OTPCooldownSeconds) is enforced: if
+// any OTP was issued for the same user+device within the cooldown window
+// the call returns ErrOTPCooldown.
 func (s *AgentKeyStore) GenerateOTP(p OTPParams) (string, error) {
 	if p.TTL <= 0 {
 		p.TTL = 5 * time.Minute
+	}
+
+	// Enforce a per-(userId, deviceId) cooldown: reject if any OTP was
+	// issued for this user+device within the cooldown window. A negative
+	// CooldownSeconds disables the check; zero falls back to the package
+	// default (OTPCooldownSeconds).
+	if p.CooldownSeconds >= 0 {
+		cooldown := p.CooldownSeconds
+		if cooldown == 0 {
+			cooldown = OTPCooldownSeconds
+		}
+		cutoff := time.Now().Unix() - cooldown
+		var recentCount int
+		if err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM otp_records
+			 WHERE usr_id = ? AND dev_id = ? AND created_at > ?`,
+			p.UserId, p.DeviceId, cutoff,
+		).Scan(&recentCount); err == nil && recentCount > 0 {
+			return "", common.ErrOTPCooldown
+		}
 	}
 
 	code, err := randomDigits(6)

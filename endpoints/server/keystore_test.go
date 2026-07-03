@@ -249,3 +249,207 @@ func TestSweepExpiredDeactivates_NoRowsNoError(t *testing.T) {
 		t.Fatalf("expected 0 rows swept on empty store, got %d", n)
 	}
 }
+
+// ── OTP tests ──────────────────────────────────────────────────────────────
+
+func TestGenerateOTP_ValidateOTP_Success(t *testing.T) {
+	s := func() *AgentKeyStore {
+		s, _, _ := newTestStore(t)
+		return s
+	}()
+
+	code, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP: %v", err)
+	}
+	if len(code) != 6 {
+		t.Fatalf("expected 6-digit OTP, got %q", code)
+	}
+
+	if err := s.ValidateOTP("alice", "dev1", code); err != nil {
+		t.Fatalf("ValidateOTP correct code: %v", err)
+	}
+}
+
+func TestValidateOTP_WrongCode(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	code, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP: %v", err)
+	}
+
+	// Wrong code should return ErrOTPInvalid.
+	err = s.ValidateOTP("alice", "dev1", "000000")
+	if !errors.Is(err, common.ErrOTPInvalid) {
+		t.Fatalf("expected ErrOTPInvalid, got %v", err)
+	}
+
+	// Correct code must still work after a single wrong guess.
+	if err := s.ValidateOTP("alice", "dev1", code); err != nil {
+		t.Fatalf("ValidateOTP correct code after wrong guess: %v", err)
+	}
+}
+
+func TestValidateOTP_AlreadyUsed(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	code, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP: %v", err)
+	}
+
+	if err := s.ValidateOTP("alice", "dev1", code); err != nil {
+		t.Fatalf("first ValidateOTP: %v", err)
+	}
+
+	// Second use must return ErrOTPAlreadyUsed.
+	err = s.ValidateOTP("alice", "dev1", code)
+	if !errors.Is(err, common.ErrOTPAlreadyUsed) {
+		t.Fatalf("expected ErrOTPAlreadyUsed, got %v", err)
+	}
+}
+
+func TestValidateOTP_Expired(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	code, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 1 * time.Second})
+	if err != nil {
+		t.Fatalf("GenerateOTP: %v", err)
+	}
+
+	time.Sleep(1500 * time.Millisecond)
+
+	err = s.ValidateOTP("alice", "dev1", code)
+	if !errors.Is(err, common.ErrOTPExpired) {
+		t.Fatalf("expected ErrOTPExpired, got %v", err)
+	}
+}
+
+func TestValidateOTP_RateLimit(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	code, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP: %v", err)
+	}
+
+	wrong := "000000"
+	if wrong == code {
+		wrong = "999999"
+	}
+
+	// Exhaust attempts.
+	for i := 0; i < MaxOTPAttempts; i++ {
+		err = s.ValidateOTP("alice", "dev1", wrong)
+		if i < MaxOTPAttempts-1 {
+			if !errors.Is(err, common.ErrOTPInvalid) {
+				t.Fatalf("attempt %d: expected ErrOTPInvalid, got %v", i+1, err)
+			}
+		} else {
+			if !errors.Is(err, common.ErrOTPRateLimited) {
+				t.Fatalf("attempt %d: expected ErrOTPRateLimited, got %v", i+1, err)
+			}
+		}
+	}
+
+	// After rate-limit, even the correct code must fail (OTP invalidated).
+	err = s.ValidateOTP("alice", "dev1", code)
+	if !errors.Is(err, common.ErrOTPInvalid) {
+		t.Fatalf("after rate-limit: expected ErrOTPInvalid, got %v", err)
+	}
+}
+
+func TestGenerateOTP_InvalidatesPrevious(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	code1, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP 1: %v", err)
+	}
+
+	// Generate a second OTP for the same user+device — invalidates code1.
+	code2, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP 2: %v", err)
+	}
+	if code1 == code2 {
+		t.Fatal("expected different OTP codes")
+	}
+
+	// First OTP should now be used=1 (invalidated by the second GenerateOTP).
+	err = s.ValidateOTP("alice", "dev1", code1)
+	if !errors.Is(err, common.ErrOTPAlreadyUsed) {
+		t.Fatalf("expected ErrOTPAlreadyUsed for old OTP, got %v", err)
+	}
+
+	// Second OTP should still work.
+	if err := s.ValidateOTP("alice", "dev1", code2); err != nil {
+		t.Fatalf("ValidateOTP code2: %v", err)
+	}
+}
+
+// ── OTP sweep tests ──────────────────────────────────────────────────────
+
+func TestSweepStaleOTPs_DeletesUsedAndExpired(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	// Generate two OTPs and use one.
+	code1, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP 1: %v", err)
+	}
+	_, err = s.GenerateOTP(OTPParams{UserId: "bob", DeviceId: "dev1", TTL: 1 * time.Second})
+	if err != nil {
+		t.Fatalf("GenerateOTP 2: %v", err)
+	}
+
+	// Use code1 (marks used=1).
+	if err := s.ValidateOTP("alice", "dev1", code1); err != nil {
+		t.Fatalf("ValidateOTP code1: %v", err)
+	}
+
+	// Wait for code2 to expire.
+	time.Sleep(1500 * time.Millisecond)
+
+	// Sweep with 0 retention (delete everything that is already used or expired).
+	n, err := s.SweepStaleOTPs(0)
+	if err != nil {
+		t.Fatalf("SweepStaleOTPs: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("expected 2 stale OTPs deleted (1 used + 1 expired), got %d", n)
+	}
+
+	// Second sweep should be a no-op.
+	n, err = s.SweepStaleOTPs(0)
+	if err != nil {
+		t.Fatalf("SweepStaleOTPs (second): %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 rows on second sweep, got %d", n)
+	}
+}
+
+func TestSweepStaleOTPs_PreservesPending(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	code, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP: %v", err)
+	}
+
+	// Sweep with 0 retention must NOT delete a pending (unused, unexpired) OTP.
+	n, err := s.SweepStaleOTPs(0)
+	if err != nil {
+		t.Fatalf("SweepStaleOTPs: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 rows deleted (pending OTP preserved), got %d", n)
+	}
+
+	// Pending OTP must still validate.
+	if err := s.ValidateOTP("alice", "dev1", code); err != nil {
+		t.Fatalf("ValidateOTP after sweep: %v", err)
+	}
+}

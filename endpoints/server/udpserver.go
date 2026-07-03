@@ -440,6 +440,13 @@ func (s *UdpServer) Start(dirPath string, logLevel int) (err error) {
 					} else if n > 0 {
 						log.Info("keystore: swept %d expired agent key(s)", n)
 					}
+					// Also purge stale OTP rows (used or expired, older
+					// than 24h) so the table doesn't grow unbounded.
+					if n, err := s.keyStore.SweepStaleOTPs(86400); err != nil {
+						log.Warning("keystore: otp sweep failed: %v", err)
+					} else if n > 0 {
+						log.Info("keystore: swept %d stale otp record(s)", n)
+					}
 				}
 			}
 		}()

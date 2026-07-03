@@ -73,7 +73,8 @@ func (s *AgentKeyStore) migrate() error {
 		otp_code   TEXT NOT NULL,
 		created_at INTEGER NOT NULL,
 		expires_at INTEGER NOT NULL,
-		used       INTEGER DEFAULT 0
+		used       INTEGER DEFAULT 0,
+		attempts   INTEGER DEFAULT 0
 	);
 	CREATE INDEX IF NOT EXISTS idx_otp_usr_dev ON otp_records(usr_id, dev_id);
 
@@ -139,13 +140,23 @@ func (s *AgentKeyStore) GenerateOTP(p OTPParams) (string, error) {
 	return code, nil
 }
 
+// MaxOTPAttempts is the number of consecutive incorrect OTP guesses allowed
+// before the OTP is invalidated.
+const MaxOTPAttempts = 5
+
 // ValidateOTP checks the OTP for the given user+device. Returns nil on
 // success, or a specific error:
 //
-//	ErrOTPInvalid     — no matching OTP found
+//	ErrOTPInvalid     — no matching OTP found (or wrong code)
 //	ErrOTPExpired     — OTP has expired
 //	ErrOTPAlreadyUsed — OTP was already used
+//	ErrOTPRateLimited — too many failed attempts; OTP has been invalidated
+//
+// Each incorrect guess increments an attempt counter on the pending OTP.
+// After MaxOTPAttempts failures the OTP is invalidated and ErrOTPRateLimited
+// is returned. A successful validation resets the counter.
 func (s *AgentKeyStore) ValidateOTP(userId, deviceId, code string) error {
+	// Try exact match first — the common success path.
 	var id int64
 	var expiresAt int64
 	var used int
@@ -155,29 +166,63 @@ func (s *AgentKeyStore) ValidateOTP(userId, deviceId, code string) error {
 		 ORDER BY created_at DESC LIMIT 1`,
 		userId, deviceId, code,
 	).Scan(&id, &expiresAt, &used)
+
+	if err == nil {
+		// Code matched.
+		if used != 0 {
+			return common.ErrOTPAlreadyUsed
+		}
+		if time.Now().Unix() > expiresAt {
+			return common.ErrOTPExpired
+		}
+		// Mark as used — reset attempts to 0 on success.
+		_, err = s.db.Exec(`UPDATE otp_records SET used = 1, attempts = 0 WHERE id = ?`, id)
+		if err != nil {
+			log.Error("keystore: mark otp used: %v", err)
+		}
+		log.Info("keystore: otp validated for user=%s device=%s", userId, deviceId)
+		return nil
+	}
+
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("keystore: query otp: %w", err)
+	}
+
+	// Code did not match — track the failed attempt on the most recent
+	// pending (unused, unexpired) OTP for this user+device.
+	var attempts int
+	err = s.db.QueryRow(
+		`SELECT id, expires_at, used, attempts FROM otp_records
+		 WHERE usr_id = ? AND dev_id = ? AND used = 0
+		 ORDER BY created_at DESC LIMIT 1`,
+		userId, deviceId,
+	).Scan(&id, &expiresAt, &used, &attempts)
 	if err == sql.ErrNoRows {
 		return common.ErrOTPInvalid
 	}
 	if err != nil {
-		return fmt.Errorf("keystore: query otp: %w", err)
-	}
-
-	if used != 0 {
-		return common.ErrOTPAlreadyUsed
+		return fmt.Errorf("keystore: query pending otp: %w", err)
 	}
 
 	if time.Now().Unix() > expiresAt {
 		return common.ErrOTPExpired
 	}
 
-	// Mark as used.
-	_, err = s.db.Exec(`UPDATE otp_records SET used = 1 WHERE id = ?`, id)
-	if err != nil {
-		log.Error("keystore: mark otp used: %v", err)
+	// Increment failed-attempt counter.
+	attempts++
+	if attempts >= MaxOTPAttempts {
+		// Too many attempts — invalidate the OTP.
+		_, _ = s.db.Exec(`UPDATE otp_records SET used = 1, attempts = ? WHERE id = ?`, attempts, id)
+		log.Warning("keystore: otp rate-limited for user=%s device=%s after %d attempts", userId, deviceId, attempts)
+		return common.ErrOTPRateLimited
 	}
 
-	log.Info("keystore: otp validated for user=%s device=%s", userId, deviceId)
-	return nil
+	_, err = s.db.Exec(`UPDATE otp_records SET attempts = ? WHERE id = ?`, attempts, id)
+	if err != nil {
+		log.Error("keystore: update otp attempts: %v", err)
+	}
+	log.Info("keystore: otp attempt %d/%d failed for user=%s device=%s", attempts, MaxOTPAttempts, userId, deviceId)
+	return common.ErrOTPInvalid
 }
 
 // ── Agent key operations ──────────────────────────────────────────────────
@@ -376,6 +421,31 @@ func (s *AgentKeyStore) SweepExpiredDeactivates() (int64, error) {
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("keystore: sweep rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// SweepStaleOTPs deletes OTP rows that are already used or expired and
+// were created more than retentionSeconds ago. Returns the number of rows
+// deleted. Unused, non-expired OTPs are never swept. Retention defaults
+// to 86400s (24 hours) when passed 0 or negative.
+func (s *AgentKeyStore) SweepStaleOTPs(retentionSeconds int64) (int64, error) {
+	if retentionSeconds <= 0 {
+		retentionSeconds = 86400
+	}
+	cutoff := time.Now().Unix() - retentionSeconds
+	res, err := s.db.Exec(
+		`DELETE FROM otp_records
+		 WHERE created_at < ?
+		   AND (used = 1 OR expires_at <= ?)`,
+		cutoff, time.Now().Unix(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("keystore: sweep otp: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("keystore: sweep otp rows affected: %w", err)
 	}
 	return n, nil
 }

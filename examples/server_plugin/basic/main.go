@@ -30,6 +30,10 @@ type config struct {
 	SMTPPassword string `toml:"smtp_password"`
 	SMTPFrom     string `toml:"smtp_from"`
 	SMTPSubject  string `toml:"smtp_subject"`
+	// RequireEmailMatch, when true, enforces that the email address
+	// supplied in UserData matches the claimed userId. This is the
+	// minimum identity-binding check for a demo deployment.
+	RequireEmailMatch bool `toml:"require_email_match"`
 }
 
 var (
@@ -339,6 +343,18 @@ func ExportedData() *plugins.PluginParamsOut {
 
 // RequestOTP generates a one-time password, sends it via email, and stores
 // it via the server's key store.
+//
+// SECURITY: The recipient email address is taken from req.Msg.UserData["email"],
+// which is caller-supplied. In production, the ASP MUST verify that the
+// claimed userId is bound to that email address (e.g., pre-verified identity
+// from an SSO assertion, a confirmed email in a user directory, or an OIDC
+// id_token claim). Without this check, an attacker who controls an inbox can
+// register a public key under any userId.
+//
+// This example plugin demonstrates the minimum check via the
+// RequireEmailMatch config option, which validates that the email matches
+// userId. For a real deployment, replace this with your identity provider's
+// verification.
 func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper) error {
 	if helper == nil || helper.GenerateOTPFunc == nil {
 		return fmt.Errorf("RequestOTP: keystore helper not available")
@@ -361,6 +377,12 @@ func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper
 	if !ok || emailAddr == "" {
 		emailAddr = req.Msg.UserId // fallback: use userId as email
 		log.Warning("RequestOTP: no email in UserData, using userId as email recipient")
+	}
+
+	// Identity-binding check: when RequireEmailMatch is set, reject
+	// requests where the email does not equal the claimed userId.
+	if baseConf != nil && baseConf.RequireEmailMatch && emailAddr != req.Msg.UserId {
+		return fmt.Errorf("RequestOTP: email %s does not match userId %s", emailAddr, req.Msg.UserId)
 	}
 
 	if err := sendOTPEmail(emailAddr, otpCode); err != nil {
@@ -449,9 +471,12 @@ func ListService(req *common.NhpListRequest, helper *plugins.NhpServerPluginHelp
 
 func sendOTPEmail(to, code string) error {
 	if baseConf == nil || baseConf.SMTPHost == "" {
-		// No SMTP configured — log the OTP for development/demo use.
-		log.Info("OTP CODE for %s: %s (SMTP not configured, printed to log)", to, code)
-		return nil
+		// SMTP not configured — fail closed. The OTP code is logged at
+		// Debug level so development setups can retrieve it from logs
+		// when log level is set accordingly; in production (Info level)
+		// the code is never written to logs.
+		log.Debug("OTP CODE for %s: %s (SMTP not configured)", to, code)
+		return fmt.Errorf("SMTP not configured, cannot send OTP email")
 	}
 
 	subject := baseConf.SMTPSubject

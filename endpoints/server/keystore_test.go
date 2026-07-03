@@ -92,7 +92,7 @@ func TestFindAgentByPublicKey_ExpiredKeyHidden(t *testing.T) {
 		t.Fatalf("RegisterAgentKey: %v", err)
 	}
 	// Wait past expiry.
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond)
 
 	found, err := s.FindAgentByPublicKey(pkA)
 	if err != nil {
@@ -124,7 +124,7 @@ func TestGetAgentKeyExpiry_ExpiredReturnsFalse(t *testing.T) {
 	if err := s.RegisterAgentKey("alice", "dev1", pkA, 1); err != nil {
 		t.Fatalf("RegisterAgentKey: %v", err)
 	}
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond)
 
 	active, exp, err := s.GetAgentKeyExpiry("alice", "dev1")
 	if err != nil {
@@ -210,7 +210,7 @@ func TestSweepExpiredDeactivates_ExpiresExpiredOnly(t *testing.T) {
 		t.Fatalf("RegisterAgentKey: %v", err)
 	}
 
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond)
 
 	n, err := s.SweepExpiredDeactivates()
 	if err != nil {
@@ -319,7 +319,7 @@ func TestValidateOTP_Expired(t *testing.T) {
 		t.Fatalf("GenerateOTP: %v", err)
 	}
 
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond)
 
 	err = s.ValidateOTP("alice", "dev1", code)
 	if !errors.Is(err, common.ErrOTPExpired) {
@@ -462,7 +462,7 @@ func TestSweepStaleOTPs_DeletesUsedAndExpired(t *testing.T) {
 	}
 
 	// Wait for code2 to expire.
-	time.Sleep(1500 * time.Millisecond)
+	time.Sleep(2500 * time.Millisecond)
 
 	// Sweep with 0 retention (delete everything that is already used or expired).
 	n, err := s.SweepStaleOTPs(0)

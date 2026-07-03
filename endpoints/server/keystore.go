@@ -160,16 +160,20 @@ func (s *AgentKeyStore) ValidateOTP(userId, deviceId, code string) error {
 	var id int64
 	var expiresAt int64
 	var used int
+	var attempts int
 	err := s.db.QueryRow(
-		`SELECT id, expires_at, used FROM otp_records
+		`SELECT id, expires_at, used, attempts FROM otp_records
 		 WHERE usr_id = ? AND dev_id = ? AND otp_code = ?
 		 ORDER BY created_at DESC LIMIT 1`,
 		userId, deviceId, code,
-	).Scan(&id, &expiresAt, &used)
+	).Scan(&id, &expiresAt, &used, &attempts)
 
 	if err == nil {
 		// Code matched.
 		if used != 0 {
+			if attempts >= MaxOTPAttempts {
+				return common.ErrOTPInvalid // rate-limited: don't leak that the code was correct
+			}
 			return common.ErrOTPAlreadyUsed
 		}
 		if time.Now().Unix() > expiresAt {
@@ -190,7 +194,6 @@ func (s *AgentKeyStore) ValidateOTP(userId, deviceId, code string) error {
 
 	// Code did not match — track the failed attempt on the most recent
 	// pending (unused, unexpired) OTP for this user+device.
-	var attempts int
 	err = s.db.QueryRow(
 		`SELECT id, expires_at, used, attempts FROM otp_records
 		 WHERE usr_id = ? AND dev_id = ? AND used = 0
@@ -428,9 +431,10 @@ func (s *AgentKeyStore) SweepExpiredDeactivates() (int64, error) {
 // SweepStaleOTPs deletes OTP rows that are already used or expired and
 // were created more than retentionSeconds ago. Returns the number of rows
 // deleted. Unused, non-expired OTPs are never swept. Retention defaults
-// to 86400s (24 hours) when passed 0 or negative.
+// to 86400s (24 hours) when passed a negative value. Pass 0 to delete all
+// used or expired OTPs regardless of age.
 func (s *AgentKeyStore) SweepStaleOTPs(retentionSeconds int64) (int64, error) {
-	if retentionSeconds <= 0 {
+	if retentionSeconds < 0 {
 		retentionSeconds = 86400
 	}
 	cutoff := time.Now().Unix() - retentionSeconds

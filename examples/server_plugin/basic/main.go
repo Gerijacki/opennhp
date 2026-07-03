@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -25,7 +26,7 @@ type config struct {
 	ExamplePassword string
 	// SMTP settings for OTP email delivery.
 	SMTPHost     string `toml:"smtp_host"`
-	SMTPPort     int    `toml:"smtp_port"`
+	SMTPPort     string `toml:"smtp_port"`
 	SMTPUsername string `toml:"smtp_username"`
 	SMTPPassword string `toml:"smtp_password"`
 	SMTPFrom     string `toml:"smtp_from"`
@@ -491,7 +492,11 @@ func sendOTPEmail(to, code string) error {
 	body += fmt.Sprintf("Your verification code is: %s\r\n", code)
 	body += fmt.Sprintf("This code will expire in 5 minutes.\r\n")
 
-	addr := fmt.Sprintf("%s:%d", baseConf.SMTPHost, baseConf.SMTPPort)
+	port, err := strconv.Atoi(baseConf.SMTPPort)
+	if err != nil || port <= 0 {
+		port = 587
+	}
+	addr := fmt.Sprintf("%s:%d", baseConf.SMTPHost, port)
 
 	var auth smtp.Auth
 	if baseConf.SMTPUsername != "" {

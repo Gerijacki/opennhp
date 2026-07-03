@@ -60,9 +60,11 @@ type Server struct {
 	// Load balancing strategy. Defaults to weighted-random.
 	LoadBalance LoadBalanceScheme `toml:"LoadBalance"`
 
-	// StickyInstance (default true) keeps the same real-client IP routed
+	// StickyInstance (default false) keeps the same real-client IP routed
 	// to the same instance via hash-based selection. When false, each
-	// request is load-balanced independently. Mirrors
+	// request is load-balanced independently. Enable for stateful flows
+	// like OTP→REG where per-instance local state (SQLite) must be
+	// consistent across requests. Mirrors
 	// clusterconfig.ClusterConfig.StickyInstance.
 	StickyInstance *bool `toml:"StickyInstance"`
 

@@ -258,7 +258,7 @@ func (rs *RelayServer) buildServer(c *Server) (*serverRuntime, error) {
 	}
 	id := utils.PubKeyFingerprint(pubKey)
 
-	sticky := true // default
+	sticky := false // default: per-request load balancing
 	if c.StickyInstance != nil {
 		sticky = *c.StickyInstance
 	}
@@ -985,10 +985,11 @@ func (rs *RelayServer) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	realAddrKey := realAddr.String()
 
-	// Pick a target instance. When StickyInstance is enabled (default),
+	// Pick a target instance. When StickyInstance is enabled,
 	// hash the real client IP so the same client always reaches the same
 	// instance — required for stateful flows like OTP→REG where per-
 	// instance local state (SQLite) must be consistent across requests.
+	// When disabled (default), each request is load-balanced independently.
 	var inst *serverInstance
 	if cr.sticky && len(cr.instances) > 1 {
 		var ok bool

@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -387,6 +388,56 @@ func TestGenerateOTP_InvalidatesPrevious(t *testing.T) {
 	// Second OTP should still work.
 	if err := s.ValidateOTP("alice", "dev1", code2); err != nil {
 		t.Fatalf("ValidateOTP code2: %v", err)
+	}
+}
+
+// TestGenerateOTP_PerUserRateLimit verifies that generating OTPs for the
+// same userId across different deviceIds is capped at MaxOTPPerUserPerWindow
+// within the cooldown window. This prevents an attacker from bypassing the
+// per-device cooldown by rotating the (unauthenticated) deviceId field.
+func TestGenerateOTP_PerUserRateLimit(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	// Generate one OTP per deviceId — each is a different device, so the
+	// per-device cooldown allows them all. The per-userId cap should
+	// reject the (MaxOTPPerUserPerWindow+1)-th request.
+	for i := 0; i < MaxOTPPerUserPerWindow; i++ {
+		devId := fmt.Sprintf("dev%d", i)
+		_, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: devId, TTL: 5 * time.Minute})
+		if err != nil {
+			t.Fatalf("device %s (iteration %d): expected success, got %v", devId, i+1, err)
+		}
+	}
+
+	// The next request with yet another deviceId must be rejected by the
+	// per-userId rate limit.
+	_, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev_overflow", TTL: 5 * time.Minute})
+	if !errors.Is(err, common.ErrOTPCooldown) {
+		t.Fatalf("expected ErrOTPCooldown after %d devices, got %v", MaxOTPPerUserPerWindow, err)
+	}
+
+	// A different user must still be able to request OTP (isolation check).
+	_, err = s.GenerateOTP(OTPParams{UserId: "bob", DeviceId: "dev0", TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("different user should not be rate-limited: %v", err)
+	}
+}
+
+// TestGenerateOTP_CooldownDisabledBypassesPerUserLimit verifies that a
+// negative CooldownSeconds disables the per-userId and distinct-device
+// checks as well (not just the per-device cooldown). This is the contract
+// that existing tests rely on.
+func TestGenerateOTP_CooldownDisabledBypassesPerUserLimit(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	opts := OTPParams{UserId: "alice", DeviceId: "dev0", TTL: 5 * time.Minute, CooldownSeconds: -1}
+	for i := 0; i < MaxOTPPerUserPerWindow+2; i++ {
+		opts.DeviceId = fmt.Sprintf("dev%d", i)
+		_, err := s.GenerateOTP(opts)
+		if err != nil {
+			t.Fatalf("cooldown disabled: iteration %d (device %s): expected success, got %v",
+				i+1, opts.DeviceId, err)
+		}
 	}
 }
 

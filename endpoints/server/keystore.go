@@ -101,9 +101,23 @@ func (s *AgentKeyStore) migrate() error {
 
 // OTPCooldownSeconds is the minimum interval between successive OTP
 // generations for the same user+device. A request that arrives before
-// the cooldown elapses is rejected with ErrOTPCooldown. This limits
-// email-flood and OTP-invalidation abuse from unauthenticated callers.
+// the cooldown elapses is rejected with ErrOTPCooldown.
 const OTPCooldownSeconds int64 = 60
+
+// MaxOTPPerUserPerWindow caps the total number of OTP generations for a
+// single userId across all deviceIds within the cooldown window. This
+// closes the deviceId-rotation bypass: without it, an attacker can vary
+// the (unauthenticated, attacker-controlled) deviceId on each request to
+// evade the per-device cooldown and email-bomb the victim. A legitimate
+// multi-device user is unlikely to exceed this limit in normal use.
+const MaxOTPPerUserPerWindow = 5
+
+// MaxDistinctDevicesPerUserPerWindow caps the number of distinct deviceIds
+// for a single userId within the cooldown window. This bounds the
+// disk-growth DoS dimension of the deviceId-rotation attack: even if the
+// attacker stays just below the per-user OTP cap, they can only create so
+// many distinct (usr_id, dev_id) rows before the sweep cleans them up.
+const MaxDistinctDevicesPerUserPerWindow = 5
 
 // OTPParams holds the parameters for generating an OTP.
 type OTPParams struct {
@@ -145,6 +159,33 @@ func (s *AgentKeyStore) GenerateOTP(p OTPParams) (string, error) {
 			 WHERE usr_id = ? AND dev_id = ? AND created_at > ?`,
 			p.UserId, p.DeviceId, cutoff,
 		).Scan(&recentCount); err == nil && recentCount > 0 {
+			return "", common.ErrOTPCooldown
+		}
+
+		// Per-userId rate limit: cap total OTPs for a user across ALL
+		// deviceIds within the cooldown window. This prevents an
+		// attacker from bypassing the per-device cooldown by rotating
+		// the (unauthenticated) deviceId on each request.
+		var userCount int
+		if err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM otp_records
+			 WHERE usr_id = ? AND created_at > ?`,
+			p.UserId, cutoff,
+		).Scan(&userCount); err == nil && userCount >= MaxOTPPerUserPerWindow {
+			return "", common.ErrOTPCooldown
+		}
+
+		// Cap distinct deviceIds per user per cooldown window. This
+		// bounds the disk-growth DoS vector: even if the attacker
+		// distributes requests across deviceIds to stay under the
+		// per-user OTP cap, they can only create so many distinct
+		// rows before the sweep cleans them up.
+		var distinctDevices int
+		if err := s.db.QueryRow(
+			`SELECT COUNT(DISTINCT dev_id) FROM otp_records
+			 WHERE usr_id = ? AND created_at > ?`,
+			p.UserId, cutoff,
+		).Scan(&distinctDevices); err == nil && distinctDevices >= MaxDistinctDevicesPerUserPerWindow {
 			return "", common.ErrOTPCooldown
 		}
 	}

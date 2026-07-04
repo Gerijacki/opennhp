@@ -111,6 +111,14 @@ func (s *UdpServer) HandleKnockRequest(ppd *core.PacketParserData) (err error) {
 		log.Info("server-agent(%s#%d@%s)[HandleKnockRequest] succeed: %+v", knkMsg.UserId, transactionId, addrStr)
 	}()
 
+	// record the auth outcome. For DHP knocks the result lives on dhpAckMsg;
+	// for regular knocks on ackMsg. ErrSuccess means the agent was authorized.
+	resultCode := ackMsg.ErrCode
+	if ppd.HeaderType == core.DHP_KNK {
+		resultCode = dhpAckMsg.ErrCode
+	}
+	s.metrics.recordKnockAuth(resultCode == common.ErrSuccess.ErrorCode())
+
 	// send back knock ack response
 	ackBytes, _ := json.Marshal(ackMsg)
 

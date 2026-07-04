@@ -14,11 +14,12 @@ linters:
     - errcheck  # TODO: Enable after fixing existing issues
   settings:
     govet:
-      # Not using enable-all to avoid shadow analyzer
-      # TODO: Enable shadow after fixing existing shadow issues (#1374)
+      # enable-all is intentionally avoided to keep the noisy
+      # fieldalignment analyzer off; shadow is turned on explicitly.
+      enable:
+        - shadow
       disable:
         - fieldalignment
-        - shadow
     misspell:
       locale: US
       ignore-rules:
@@ -44,9 +45,6 @@ linters:
       - linters:
           - gosec
         path: _test\.go
-      - linters:
-          - govet
-        text: "shadow: declaration of .* shadows declaration"
       # Suppress G103 (unsafe) for crypto/packet code - intentional for zero-copy performance
       - linters:
           - gosec

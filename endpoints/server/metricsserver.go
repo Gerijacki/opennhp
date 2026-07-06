@@ -56,10 +56,11 @@ func (ms *metricsServer) start() error {
 	mux.HandleFunc("/healthz", ms.handleHealthz)
 
 	ms.http = &http.Server{
-		Addr:         addr,
-		Handler:      mux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      10 * time.Second,
 	}
 
 	log.Info("[Metrics] endpoint listening on http://%s (/metrics, /healthz)", addr)

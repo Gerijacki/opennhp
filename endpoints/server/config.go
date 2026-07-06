@@ -164,12 +164,12 @@ type Config struct {
 // MetricsConfig configures the observability endpoint exposed by nhp-server.
 type MetricsConfig struct {
 	// Enabled turns the /metrics + /healthz listener on. Off by default.
-	Enabled bool
+	Enabled bool `json:"enabled"`
 	// ListenIp is the bind address. Empty defaults to 127.0.0.1 so metrics are
 	// not exposed off-host unless the operator explicitly opts in.
-	ListenIp string
+	ListenIp string `json:"listenIp"`
 	// ListenPort is the TCP port for the endpoint. Empty/zero defaults to 9100.
-	ListenPort int
+	ListenPort int `json:"listenPort"`
 }
 
 type RemoteConfig struct {

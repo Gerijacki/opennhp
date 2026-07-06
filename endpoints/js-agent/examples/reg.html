@@ -474,9 +474,13 @@ async function initAgent() {
   agent.addServer({ publicKey: selectedServer.publicKeyBase64 });
 }
 
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
 function showAlert(msg, type) {
   const cls = { info: 'alert-info', success: 'alert-success', error: 'alert-error' };
-  $('#alert-container').innerHTML = `<div class="alert ${cls[type] || 'alert-info'}">${msg}</div>`;
+  $('#alert-container').innerHTML = `<div class="alert ${cls[type] || 'alert-info'}">${escapeHtml(msg)}</div>`;
 }
 
 function generateDeviceId() {

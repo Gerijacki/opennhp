@@ -1643,9 +1643,13 @@ if (result.success) {
     return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
   }
 
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
   function log(level, msg) {
     const cls = { info:'log-info', ok:'log-ok', err:'log-err', warn:'log-warn', data:'log-data', arrow:'log-arrow' }[level] || 'log-data';
-    logEl.innerHTML += `<span class="log-time">[${ts()}]</span> <span class="${cls}">${msg}</span>\n`;
+    logEl.innerHTML += `<span class="log-time">[${ts()}]</span> <span class="${cls}">${escapeHtml(msg)}</span>\n`;
     logEl.scrollTop = logEl.scrollHeight;
   }
 

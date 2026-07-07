@@ -1,6 +1,11 @@
 package server
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -526,5 +531,142 @@ func TestSweepStaleOTPs_PreservesPending(t *testing.T) {
 	// Pending OTP must still validate.
 	if err := s.ValidateOTP("alice", "dev1", code, ""); err != nil {
 		t.Fatalf("ValidateOTP after sweep: %v", err)
+	}
+}
+
+// ── WebAuthn tests ────────────────────────────────────────────────────────
+
+// buildCOSEP256Key encodes an ecdsa P-256 public key as a COSE_Key CBOR map
+// the way browsers produce it: {1:2, 3:-7, -1:1, -2:x, -3:y}.
+func buildCOSEP256Key(pub *ecdsa.PublicKey) []byte {
+	xb := pub.X.Bytes()
+	yb := pub.Y.Bytes()
+	x := make([]byte, 32)
+	y := make([]byte, 32)
+	copy(x[32-len(xb):], xb)
+	copy(y[32-len(yb):], yb)
+
+	var buf []byte
+	buf = append(buf, 0xa5)             // map(5)
+	buf = append(buf, 0x01, 0x02)       // 1: 2 (kty=EC2)
+	buf = append(buf, 0x03, 0x26)       // 3: -7 (alg=ES256)
+	buf = append(buf, 0x20, 0x01)       // -1: 1 (crv=P-256)
+	buf = append(buf, 0x21, 0x58, 0x20) // -2: bytes(32)
+	buf = append(buf, x...)
+	buf = append(buf, 0x22, 0x58, 0x20) // -3: bytes(32)
+	buf = append(buf, y...)
+	return buf
+}
+
+// signWebAuthnAssertion produces (authDataB64, clientDataJSONB64, sigB64)
+// the way navigator.credentials.get() would for the given challenge.
+func signWebAuthnAssertion(t *testing.T, priv *ecdsa.PrivateKey, challenge []byte) (string, string, string) {
+	t.Helper()
+	clientData := fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":"https://reg.opennhp.org"}`,
+		base64.RawURLEncoding.EncodeToString(challenge))
+	authData := make([]byte, 37) // rpIdHash(32) + flags(1) + signCount(4)
+	authData[32] = 0x01          // UP flag
+
+	cdHash := sha256.Sum256([]byte(clientData))
+	signed := append(append([]byte{}, authData...), cdHash[:]...)
+	digest := sha256.Sum256(signed)
+	sig, err := ecdsa.SignASN1(rand.Reader, priv, digest[:])
+	if err != nil {
+		t.Fatalf("SignASN1: %v", err)
+	}
+	return base64.StdEncoding.EncodeToString(authData),
+		base64.StdEncoding.EncodeToString([]byte(clientData)),
+		base64.StdEncoding.EncodeToString(sig)
+}
+
+func TestVerifyWebAuthnAssertion_ValidSignature(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	cose := base64.StdEncoding.EncodeToString(buildCOSEP256Key(&priv.PublicKey))
+
+	challenge := sha256.Sum256([]byte("123456" + "alice" + "dev1" + "serverPubKey"))
+	authB64, cdB64, sigB64 := signWebAuthnAssertion(t, priv, challenge[:])
+
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:]); err != nil {
+		t.Fatalf("VerifyWebAuthnAssertion valid: %v", err)
+	}
+}
+
+func TestVerifyWebAuthnAssertion_WrongChallenge(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cose := base64.StdEncoding.EncodeToString(buildCOSEP256Key(&priv.PublicKey))
+
+	signedChallenge := sha256.Sum256([]byte("123456alicedev1server"))
+	authB64, cdB64, sigB64 := signWebAuthnAssertion(t, priv, signedChallenge[:])
+
+	// Server expects a different challenge (e.g. attacker replaying an old
+	// assertion against a new OTP).
+	expected := sha256.Sum256([]byte("999999alicedev1server"))
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, expected[:]); err == nil {
+		t.Fatal("expected challenge mismatch error, got nil")
+	}
+}
+
+func TestVerifyWebAuthnAssertion_WrongKey(t *testing.T) {
+	privSigner, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	privOther, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Committed credential is privOther's public key; signature from privSigner.
+	cose := base64.StdEncoding.EncodeToString(buildCOSEP256Key(&privOther.PublicKey))
+
+	challenge := sha256.Sum256([]byte("123456alicedev1server"))
+	authB64, cdB64, sigB64 := signWebAuthnAssertion(t, privSigner, challenge[:])
+
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:]); err == nil {
+		t.Fatal("expected signature verification failure, got nil")
+	}
+}
+
+func TestVerifyWebAuthnAssertion_TamperedClientData(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cose := base64.StdEncoding.EncodeToString(buildCOSEP256Key(&priv.PublicKey))
+
+	challenge := sha256.Sum256([]byte("123456alicedev1server"))
+	authB64, _, sigB64 := signWebAuthnAssertion(t, priv, challenge[:])
+
+	// Re-encode clientDataJSON with the same challenge but altered content
+	// — the signature no longer covers it.
+	tampered := fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":"https://evil.example"}`,
+		base64.RawURLEncoding.EncodeToString(challenge[:]))
+	cdB64 := base64.StdEncoding.EncodeToString([]byte(tampered))
+
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:]); err == nil {
+		t.Fatal("expected verification failure on tampered clientDataJSON, got nil")
+	}
+}
+
+func TestWebAuthnCredentialStore_RoundTrip(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	if err := s.StoreWebAuthnCredential("alice", "dev1", "cred-id-1", "cose-key-1"); err != nil {
+		t.Fatalf("StoreWebAuthnCredential: %v", err)
+	}
+	credId, cose, err := s.GetWebAuthnCredential("alice", "dev1")
+	if err != nil {
+		t.Fatalf("GetWebAuthnCredential: %v", err)
+	}
+	if credId != "cred-id-1" || cose != "cose-key-1" {
+		t.Fatalf("got (%s, %s), want (cred-id-1, cose-key-1)", credId, cose)
+	}
+
+	// Upsert on same (user, device) replaces the credential.
+	if err := s.StoreWebAuthnCredential("alice", "dev1", "cred-id-2", "cose-key-2"); err != nil {
+		t.Fatalf("StoreWebAuthnCredential upsert: %v", err)
+	}
+	credId, cose, _ = s.GetWebAuthnCredential("alice", "dev1")
+	if credId != "cred-id-2" || cose != "cose-key-2" {
+		t.Fatalf("upsert got (%s, %s), want (cred-id-2, cose-key-2)", credId, cose)
+	}
+
+	// Unknown user returns empty, no error.
+	credId, cose, err = s.GetWebAuthnCredential("bob", "devX")
+	if err != nil || credId != "" || cose != "" {
+		t.Fatalf("unknown user: got (%s, %s, %v), want empty", credId, cose, err)
 	}
 }

@@ -5,10 +5,12 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
@@ -627,13 +629,18 @@ func (s *AgentKeyStore) GetWebAuthnCredential(userId, deviceId string) (credenti
 // navigator.credentials.get() in the browser.
 //
 // The browser sets challenge = SHA256(otp || userId || deviceId || serverPubKey)
-// inside clientDataJSON. The server reconstructs the same hash and verifies
-// the P-256/ES256 ECDSA signature over:
+// inside clientDataJSON. The server reconstructs the same hash
+// (expectedChallenge, raw 32 bytes) and requires the clientDataJSON
+// challenge field to match it (base64url-encoded per the WebAuthn spec),
+// then verifies the P-256/ES256 ECDSA signature over:
 //
 //	authenticatorData || SHA256(clientDataJSON)
 //
 // publicKeyCOSE is the COSE-encoded P-256 key committed at OTP time.
-func VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB64 string) error {
+// expectedChallenge may be nil to skip the challenge check (tests only —
+// production callers MUST pass it, otherwise a captured assertion could
+// be replayed with a different OTP).
+func VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB64 string, expectedChallenge []byte) error {
 	// Decode inputs.
 	coseBytes, err := base64.StdEncoding.DecodeString(publicKeyCOSE)
 	if err != nil {
@@ -662,6 +669,30 @@ func VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB
 		sigBytes, err = base64.RawURLEncoding.DecodeString(sigB64)
 		if err != nil {
 			return fmt.Errorf("webauthn: decode signature: %w", err)
+		}
+	}
+
+	// Verify the challenge inside clientDataJSON matches the expected
+	// value. WebAuthn encodes the challenge as base64url (no padding) in
+	// the JSON. Without this check a captured assertion could be replayed
+	// against a different OTP.
+	if expectedChallenge != nil {
+		var clientData struct {
+			Type      string `json:"type"`
+			Challenge string `json:"challenge"`
+		}
+		if err := json.Unmarshal(clientDataJSON, &clientData); err != nil {
+			return fmt.Errorf("webauthn: parse clientDataJSON: %w", err)
+		}
+		if clientData.Type != "webauthn.get" {
+			return fmt.Errorf("webauthn: unexpected clientData type %q", clientData.Type)
+		}
+		gotChallenge, err := base64.RawURLEncoding.DecodeString(clientData.Challenge)
+		if err != nil {
+			return fmt.Errorf("webauthn: decode clientData challenge: %w", err)
+		}
+		if subtle.ConstantTimeCompare(gotChallenge, expectedChallenge) != 1 {
+			return fmt.Errorf("webauthn: challenge mismatch")
 		}
 	}
 

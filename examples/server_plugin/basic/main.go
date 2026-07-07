@@ -387,10 +387,24 @@ func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper
 	if ttl <= 0 {
 		ttl = 300
 	}
-	otpCode, err := helper.GenerateOTPFunc(req.Msg.UserId, req.Msg.DeviceId, ttl)
+	// Bind the agent's public key (from the NHP-OTP message) to the OTP at
+	// issuance. ValidateOTP later rejects a NHP-REG that presents this OTP
+	// with a different key (stolen-OTP defense).
+	otpCode, err := helper.GenerateOTPFunc(req.Msg.UserId, req.Msg.DeviceId, req.PublicKey, ttl)
 	if err != nil {
 		log.Error("RequestOTP: generate otp failed: %v", err)
 		return err
+	}
+
+	// If the agent supplied a WebAuthn credential (hardware-backed key),
+	// commit it alongside the OTP so RegisterAgent can verify the
+	// assertion at NHP-REG time.
+	if req.Msg.WebAuthnCredential != nil && helper.StoreWebAuthnFunc != nil {
+		wc := req.Msg.WebAuthnCredential
+		if err := helper.StoreWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId, wc.CredentialId, wc.PublicKeyCOSE); err != nil {
+			log.Error("RequestOTP: store webauthn credential failed: %v", err)
+			return err
+		}
 	}
 
 	// Send OTP via email.
@@ -423,6 +437,27 @@ func RegisterAgent(req *common.NhpRegisterRequest, helper *plugins.NhpServerPlug
 		ack.ErrCode = common.ErrorToErrorCode(err)
 		ack.ErrMsg = common.ErrorToString(err)
 		return ack, err
+	}
+
+	// Step 1b: if the agent committed a WebAuthn credential at OTP time,
+	// verify the hardware-key assertion (proof of possession). The server
+	// reconstructs the challenge from the OTP + identity + server key and
+	// checks the ES256 signature against the committed credential.
+	if req.Msg.WebAuthnAssertion != nil {
+		if helper.VerifyWebAuthnFunc == nil {
+			err := fmt.Errorf("RegisterAgent: webauthn assertion supplied but helper not available")
+			ack.ErrCode = common.ErrAgentKeyStoreError.ErrorCode()
+			ack.ErrMsg = err.Error()
+			return ack, err
+		}
+		wa := req.Msg.WebAuthnAssertion
+		if err := helper.VerifyWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId, req.Msg.OTP,
+			wa.AuthenticatorData, wa.ClientDataJSON, wa.Signature); err != nil {
+			log.Error("RegisterAgent: webauthn verification failed for user=%s: %v", req.Msg.UserId, err)
+			ack.ErrCode = common.ErrorToErrorCode(err)
+			ack.ErrMsg = common.ErrorToString(err)
+			return ack, err
+		}
 	}
 
 	// Step 2: register the agent's public key.

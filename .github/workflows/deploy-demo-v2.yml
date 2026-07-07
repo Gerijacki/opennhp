@@ -579,6 +579,7 @@ jobs:
             echo "SMTP_HOST=$SMTP_HOST" >> $GITHUB_ENV
             echo "SMTP_PORT=${SMTP_PORT:-587}" >> $GITHUB_ENV
             echo "SMTP_USERNAME=$SMTP_USERNAME" >> $GITHUB_ENV
+            echo "::add-mask::$SMTP_PASSWORD"
             echo "SMTP_PASSWORD=$SMTP_PASSWORD" >> $GITHUB_ENV
             echo "SMTP_FROM=${SMTP_FROM:-noreply@opennhp.org}" >> $GITHUB_ENV
             echo "SMTP_SUBJECT=Your OpenNHP Verification Code" >> $GITHUB_ENV
@@ -993,6 +994,7 @@ jobs:
             echo "SMTP_HOST=$SMTP_HOST" >> $GITHUB_ENV
             echo "SMTP_PORT=${SMTP_PORT:-587}" >> $GITHUB_ENV
             echo "SMTP_USERNAME=$SMTP_USERNAME" >> $GITHUB_ENV
+            echo "::add-mask::$SMTP_PASSWORD"
             echo "SMTP_PASSWORD=$SMTP_PASSWORD" >> $GITHUB_ENV
             echo "SMTP_FROM=${SMTP_FROM:-noreply@opennhp.org}" >> $GITHUB_ENV
             echo "SMTP_SUBJECT=Your OpenNHP Verification Code" >> $GITHUB_ENV

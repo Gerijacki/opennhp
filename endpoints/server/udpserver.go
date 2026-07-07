@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -1389,17 +1390,39 @@ func (us *UdpServer) NewNhpServerHelper(ppd *core.PacketParserData) *plugins.Nhp
 		}
 		h.AgentKeyTTLSeconds = keyTTL
 
-		h.GenerateOTPFunc = func(userId, deviceId string, ttlSeconds int64) (string, error) {
+		h.GenerateOTPFunc = func(userId, deviceId, pubKey string, ttlSeconds int64) (string, error) {
 			ttl := time.Duration(ttlSeconds) * time.Second
 			return us.keyStore.GenerateOTP(OTPParams{
-				UserId:   userId,
-				DeviceId: deviceId,
-				TTL:      ttl,
+				UserId:    userId,
+				DeviceId:  deviceId,
+				PublicKey: pubKey,
+				TTL:       ttl,
 			})
 		}
 		h.ValidateOTPFunc = us.keyStore.ValidateOTP
 		h.RegisterKeyFunc = func(userId, deviceId, pubKeyBase64 string) error {
 			return us.keyStore.RegisterAgentKey(userId, deviceId, pubKeyBase64, keyTTL)
+		}
+		h.StoreWebAuthnFunc = us.keyStore.StoreWebAuthnCredential
+		h.VerifyWebAuthnFunc = func(userId, deviceId, otp, authDataB64, clientDataJSONB64, sigB64 string) error {
+			_, publicKeyCOSE, err := us.keyStore.GetWebAuthnCredential(userId, deviceId)
+			if err != nil {
+				return err
+			}
+			if publicKeyCOSE == "" {
+				return fmt.Errorf("webauthn: no credential committed for user=%s device=%s", userId, deviceId)
+			}
+			// The browser computes challenge = SHA256(otp || userId ||
+			// deviceId || serverPubKeyBase64) using the server public key
+			// it knocked with — which depends on the cipher scheme the
+			// agent selected. Accept either scheme's key.
+			for _, serverPubKey := range []string{us.device.PublicKeyBase64(), us.device.PublicKeyExBase64()} {
+				expected := sha256.Sum256([]byte(otp + userId + deviceId + serverPubKey))
+				if err = VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB64, expected[:]); err == nil {
+					return nil
+				}
+			}
+			return err
 		}
 		h.IsRegisteredFunc = us.keyStore.IsAgentRegistered
 		h.GetAgentKeyExpiryFunc = us.keyStore.GetAgentKeyExpiry

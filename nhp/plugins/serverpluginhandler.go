@@ -176,9 +176,65 @@ type SessionSetFunc func(ctx *gin.Context, key string, val interface{})
 type SessionSaveFunc func(ctx *gin.Context) error
 type SessionClearFunc func(ctx *gin.Context)
 
+// OTP and registration helper function types. These allow plugins to
+// interact with the server's AgentKeyStore without directly accessing
+// the database.
+//
+// pubKey is the agent public key carried in the NHP-OTP message. It is
+// bound to the OTP at issuance so that ValidateOTP can reject a
+// registration attempt that presents the same OTP with a different key
+// (stolen-OTP defense). Pass "" when the agent did not supply a key.
+type PluginOTPGenerateFunc func(userId, deviceId, pubKey string, ttlSeconds int64) (otpCode string, err error)
+type PluginOTPValidateFunc func(userId, deviceId, otpCode, pubKey string) error
+type PluginRegisterKeyFunc func(userId, deviceId, pubKeyBase64 string) error
+type PluginIsRegisteredFunc func(userId, deviceId string) (bool, error)
+
+// PluginGetAgentKeyExpiryFunc returns whether the user+device has an
+// active registered key, and the unix-seconds timestamp at which it
+// expires (or nil for never-expires). Used by plugins to echo the
+// actual expiry back to the agent without re-deriving it client-side.
+type PluginGetAgentKeyExpiryFunc func(userId, deviceId string) (active bool, expiresAt *int64, err error)
+
+// PluginStoreWebAuthnFunc persists a WebAuthn credential (base64url
+// credential ID + base64 COSE P-256 public key) committed by the agent in
+// its NHP-OTP message, bound to (userId, deviceId).
+type PluginStoreWebAuthnFunc func(userId, deviceId, credentialId, publicKeyCOSE string) error
+
+// PluginVerifyWebAuthnFunc verifies a WebAuthn assertion from an NHP-REG
+// message. The server reconstructs the expected challenge as
+// SHA256(otp || userId || deviceId || serverPubKeyBase64) and requires the
+// assertion's clientDataJSON challenge to match before checking the ES256
+// signature against the credential committed at OTP time.
+type PluginVerifyWebAuthnFunc func(userId, deviceId, otp, authDataB64, clientDataJSONB64, sigB64 string) error
+
+// PluginHasWebAuthnFunc reports whether a WebAuthn credential was committed
+// for (userId, deviceId) at OTP time. Plugins MUST fail registration closed
+// when this returns true and the NHP-REG message carries no assertion —
+// otherwise an attacker with a stolen OTP could downgrade to OTP-only
+// registration and bypass the hardware-key proof of possession.
+type PluginHasWebAuthnFunc func(userId, deviceId string) (bool, error)
+
 type NhpServerPluginHelper struct {
 	StopSignal              <-chan struct{}
 	AuthWithNhpCallbackFunc NhpPluginPostAuthFunc
+	// OTP and registration helpers — set by server, called by plugin.
+	GenerateOTPFunc       PluginOTPGenerateFunc
+	ValidateOTPFunc       PluginOTPValidateFunc
+	RegisterKeyFunc       PluginRegisterKeyFunc
+	IsRegisteredFunc      PluginIsRegisteredFunc
+	GetAgentKeyExpiryFunc PluginGetAgentKeyExpiryFunc
+	// WebAuthn helpers — optional hardware-key proof of possession.
+	StoreWebAuthnFunc  PluginStoreWebAuthnFunc
+	VerifyWebAuthnFunc PluginVerifyWebAuthnFunc
+	HasWebAuthnFunc    PluginHasWebAuthnFunc
+	// OTPTTLSeconds is the server-configured OTP lifetime in seconds.
+	// Plugins should read this instead of hardcoding a TTL.
+	OTPTTLSeconds int64
+	// AgentKeyTTLSeconds is the server-configured registered-key
+	// lifetime in seconds. The server binds this into RegisterKeyFunc
+	// so the plugin does not have to know it; plugins can still read
+	// this field to echo "valid for X hours" text in emails etc.
+	AgentKeyTTLSeconds int64
 }
 
 type HttpServerPluginHelper struct {

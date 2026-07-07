@@ -33,18 +33,18 @@ type ServerCookieMsg struct {
 // to the pending registration so a stolen OTP cannot be replayed with a
 // different key.
 type WebAuthnCredential struct {
-	CredentialId string `json:"credId"`         // base64url credential ID
-	PublicKeyCOSE string `json:"pubKeyCOSE"`    // COSE-encoded P-256 public key, base64
+	CredentialId  string `json:"credId"`     // base64url credential ID
+	PublicKeyCOSE string `json:"pubKeyCOSE"` // COSE-encoded P-256 public key, base64
 }
 
 // WebAuthnAssertion carries the signed assertion produced by
 // navigator.credentials.get() in the browser. The server verifies the
 // P-256/ES256 signature over authenticatorData || SHA256(clientDataJSON).
 type WebAuthnAssertion struct {
-	CredentialId      string `json:"credId"`           // base64url
-	AuthenticatorData string `json:"authData"`         // base64
-	ClientDataJSON    string `json:"clientDataJSON"`   // base64
-	Signature         string `json:"sig"`              // base64 DER-encoded ECDSA signature
+	CredentialId      string `json:"credId"`         // base64url
+	AuthenticatorData string `json:"authData"`       // base64
+	ClientDataJSON    string `json:"clientDataJSON"` // base64
+	Signature         string `json:"sig"`            // base64 DER-encoded ECDSA signature
 }
 
 type AgentOTPMsg struct {

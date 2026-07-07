@@ -28,24 +28,45 @@ type ServerCookieMsg struct {
 	Cookie        string `json:"cookie"`
 }
 
+// WebAuthnCredential carries the browser-generated WebAuthn credential
+// committed at OTP-request time. It binds the hardware-backed P-256 key
+// to the pending registration so a stolen OTP cannot be replayed with a
+// different key.
+type WebAuthnCredential struct {
+	CredentialId string `json:"credId"`         // base64url credential ID
+	PublicKeyCOSE string `json:"pubKeyCOSE"`    // COSE-encoded P-256 public key, base64
+}
+
+// WebAuthnAssertion carries the signed assertion produced by
+// navigator.credentials.get() in the browser. The server verifies the
+// P-256/ES256 signature over authenticatorData || SHA256(clientDataJSON).
+type WebAuthnAssertion struct {
+	CredentialId      string `json:"credId"`           // base64url
+	AuthenticatorData string `json:"authData"`         // base64
+	ClientDataJSON    string `json:"clientDataJSON"`   // base64
+	Signature         string `json:"sig"`              // base64 DER-encoded ECDSA signature
+}
+
 type AgentOTPMsg struct {
-	UserId         string         `json:"usrId"`
-	DeviceId       string         `json:"devId"`
-	OrganizationId string         `json:"orgId,omitempty"`
-	AuthServiceId  string         `json:"aspId"`
-	Passcode       string         `json:"pass,omitempty"`
-	PublicKey      string         `json:"pubKey,omitempty"`
-	UserData       map[string]any `json:"usrData,omitempty"`
+	UserId             string              `json:"usrId"`
+	DeviceId           string              `json:"devId"`
+	OrganizationId     string              `json:"orgId,omitempty"`
+	AuthServiceId      string              `json:"aspId"`
+	Passcode           string              `json:"pass,omitempty"`
+	PublicKey          string              `json:"pubKey,omitempty"`
+	WebAuthnCredential *WebAuthnCredential `json:"webauthn,omitempty"`
+	UserData           map[string]any      `json:"usrData,omitempty"`
 }
 
 type AgentRegisterMsg struct {
-	UserId         string         `json:"usrId"`
-	DeviceId       string         `json:"devId"`
-	OrganizationId string         `json:"orgId,omitempty"`
-	AuthServiceId  string         `json:"aspId"`
-	OTP            string         `json:"otp,omitempty"`
-	PublicKey      string         `json:"pubKey,omitempty"`
-	UserData       map[string]any `json:"usrData,omitempty"`
+	UserId            string             `json:"usrId"`
+	DeviceId          string             `json:"devId"`
+	OrganizationId    string             `json:"orgId,omitempty"`
+	AuthServiceId     string             `json:"aspId"`
+	OTP               string             `json:"otp,omitempty"`
+	PublicKey         string             `json:"pubKey,omitempty"`
+	WebAuthnAssertion *WebAuthnAssertion `json:"webauthn,omitempty"`
+	UserData          map[string]any     `json:"usrData,omitempty"`
 }
 
 type ServerRegisterAckMsg struct {

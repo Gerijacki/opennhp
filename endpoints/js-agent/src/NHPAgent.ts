@@ -22,6 +22,8 @@ import type {
   OtpResult,
   RegisterResult,
   ParsedPacket,
+  WebAuthnCredential,
+  WebAuthnAssertion,
 } from './types.js';
 import { generateX25519KeyPairBase64, derivePublicKeyFromBase64 } from './crypto/ecdh.js';
 import { generateSM2KeyPairBase64, deriveSM2PublicKeyFromBase64 } from './crypto/sm2.js';
@@ -357,7 +359,11 @@ export class NHPAgent {
    * @param userData - Optional user data (include `email` key for email delivery)
    * @returns Result indicating whether the request was sent successfully
    */
-  async requestOtp(serviceId: string, userData?: Record<string, unknown>): Promise<OtpResult> {
+  async requestOtp(
+    serviceId: string,
+    userData?: Record<string, unknown>,
+    webauthnCredential?: WebAuthnCredential,
+  ): Promise<OtpResult> {
     if (!this.initialized || !this.keyPair) {
       return { success: false, error: 'Agent not initialized' };
     }
@@ -377,6 +383,7 @@ export class NHPAgent {
         orgId: this.identity.organizationId,
         aspId: serviceId,
         pubKey: this.getPublicKey(),
+        webauthn: webauthnCredential,
         usrData: userData,
       };
 
@@ -425,7 +432,8 @@ export class NHPAgent {
   async registerPublicKey(
     serviceId: string,
     otp: string,
-    userData?: Record<string, unknown>
+    userData?: Record<string, unknown>,
+    webauthnAssertion?: WebAuthnAssertion,
   ): Promise<RegisterResult> {
     if (!this.initialized || !this.keyPair) {
       return { success: false, error: 'Agent not initialized', errorCode: '1' };
@@ -447,6 +455,7 @@ export class NHPAgent {
         aspId: serviceId,
         otp,
         pubKey: this.getPublicKey(),
+        webauthn: webauthnAssertion,
         usrData: userData,
       };
 

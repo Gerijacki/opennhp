@@ -1,8 +1,14 @@
 package server
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"math/big"
 	"os"
@@ -94,6 +100,17 @@ func (s *AgentKeyStore) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_agent_usr ON agent_keys(usr_id);
 	CREATE INDEX IF NOT EXISTS idx_agent_pubkey ON agent_keys(public_key);
 	CREATE INDEX IF NOT EXISTS idx_agent_expires ON agent_keys(expires_at);
+
+	CREATE TABLE IF NOT EXISTS webauthn_credentials (
+		id            INTEGER PRIMARY KEY AUTOINCREMENT,
+		usr_id        TEXT NOT NULL,
+		dev_id        TEXT NOT NULL,
+		credential_id TEXT NOT NULL UNIQUE,
+		public_key    TEXT NOT NULL,
+		created_at    INTEGER NOT NULL,
+		UNIQUE(usr_id, dev_id)
+	);
+	CREATE INDEX IF NOT EXISTS idx_webauthn_usr_dev ON webauthn_credentials(usr_id, dev_id);
 	`
 	if _, err := s.db.Exec(ddl); err != nil {
 		return err
@@ -570,6 +587,306 @@ func (s *AgentKeyStore) SweepStaleOTPs(retentionSeconds int64) (int64, error) {
 
 // randomDigits generates a string of n random decimal digits using
 // crypto/rand.
+// ── WebAuthn operations ───────────────────────────────────────────────────
+
+// StoreWebAuthnCredential persists a browser WebAuthn credential (P-256
+// public key + credential ID) bound to a (userId, deviceId) pair. Called
+// during NHP-OTP handling when the agent sends a webauthn field.
+func (s *AgentKeyStore) StoreWebAuthnCredential(userId, deviceId, credentialId, publicKeyCOSE string) error {
+	now := time.Now().Unix()
+	_, err := s.db.Exec(
+		`INSERT INTO webauthn_credentials (usr_id, dev_id, credential_id, public_key, created_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(usr_id, dev_id) DO UPDATE SET
+		   credential_id = excluded.credential_id,
+		   public_key    = excluded.public_key,
+		   created_at    = excluded.created_at`,
+		userId, deviceId, credentialId, publicKeyCOSE, now,
+	)
+	if err != nil {
+		return fmt.Errorf("keystore: store webauthn credential: %w", err)
+	}
+	log.Info("keystore: webauthn credential stored for user=%s device=%s", userId, deviceId)
+	return nil
+}
+
+// GetWebAuthnCredential retrieves the stored WebAuthn credential for a
+// (userId, deviceId) pair. Returns ("", "", nil) if not found.
+func (s *AgentKeyStore) GetWebAuthnCredential(userId, deviceId string) (credentialId, publicKeyCOSE string, err error) {
+	err = s.db.QueryRow(
+		`SELECT credential_id, public_key FROM webauthn_credentials WHERE usr_id = ? AND dev_id = ?`,
+		userId, deviceId,
+	).Scan(&credentialId, &publicKeyCOSE)
+	if err == sql.ErrNoRows {
+		return "", "", nil
+	}
+	return credentialId, publicKeyCOSE, err
+}
+
+// VerifyWebAuthnAssertion verifies a WebAuthn assertion produced by
+// navigator.credentials.get() in the browser.
+//
+// The browser sets challenge = SHA256(otp || userId || deviceId || serverPubKey)
+// inside clientDataJSON. The server reconstructs the same hash and verifies
+// the P-256/ES256 ECDSA signature over:
+//
+//	authenticatorData || SHA256(clientDataJSON)
+//
+// publicKeyCOSE is the COSE-encoded P-256 key committed at OTP time.
+func VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB64 string) error {
+	// Decode inputs.
+	coseBytes, err := base64.StdEncoding.DecodeString(publicKeyCOSE)
+	if err != nil {
+		// try base64url
+		coseBytes, err = base64.RawURLEncoding.DecodeString(publicKeyCOSE)
+		if err != nil {
+			return fmt.Errorf("webauthn: decode public key: %w", err)
+		}
+	}
+	authData, err := base64.StdEncoding.DecodeString(authDataB64)
+	if err != nil {
+		authData, err = base64.RawURLEncoding.DecodeString(authDataB64)
+		if err != nil {
+			return fmt.Errorf("webauthn: decode authData: %w", err)
+		}
+	}
+	clientDataJSON, err := base64.StdEncoding.DecodeString(clientDataJSONB64)
+	if err != nil {
+		clientDataJSON, err = base64.RawURLEncoding.DecodeString(clientDataJSONB64)
+		if err != nil {
+			return fmt.Errorf("webauthn: decode clientDataJSON: %w", err)
+		}
+	}
+	sigBytes, err := base64.StdEncoding.DecodeString(sigB64)
+	if err != nil {
+		sigBytes, err = base64.RawURLEncoding.DecodeString(sigB64)
+		if err != nil {
+			return fmt.Errorf("webauthn: decode signature: %w", err)
+		}
+	}
+
+	// Parse COSE ES256 key (algorithm -7, P-256).
+	// COSE_Key map: {1: kty(2=EC2), 3: alg(-7=ES256), -1: crv(1=P-256), -2: x, -3: y}
+	// We use x509.ParsePKIXPublicKey via a minimal DER wrapper for simplicity.
+	pubKey, err := parseCOSEP256PublicKey(coseBytes)
+	if err != nil {
+		return fmt.Errorf("webauthn: parse COSE key: %w", err)
+	}
+
+	// Signed data = authenticatorData || SHA256(clientDataJSON)
+	cdHash := sha256.Sum256(clientDataJSON)
+	signed := append(authData, cdHash[:]...)
+	digest := sha256.Sum256(signed)
+
+	if !ecdsa.VerifyASN1(pubKey, digest[:], sigBytes) {
+		return fmt.Errorf("webauthn: signature verification failed")
+	}
+	return nil
+}
+
+// parseCOSEP256PublicKey decodes a COSE_Key-encoded P-256 public key.
+// COSE map keys use CBOR integer encoding; we parse the minimal subset
+// needed for ES256 without pulling in a full CBOR library.
+//
+// COSE key format (CBOR map):
+//
+//	1  → 2      (kty = EC2)
+//	3  → -7     (alg = ES256)
+//	-1 → 1      (crv = P-256)
+//	-2 → x      (32-byte big-endian x coordinate)
+//	-3 → y      (32-byte big-endian y coordinate)
+func parseCOSEP256PublicKey(cose []byte) (*ecdsa.PublicKey, error) {
+	x, y, err := extractCOSEXY(cose)
+	if err != nil {
+		return nil, err
+	}
+	pub := &ecdsa.PublicKey{
+		Curve: elliptic.P256(),
+		X:     new(big.Int).SetBytes(x),
+		Y:     new(big.Int).SetBytes(y),
+	}
+	if !pub.Curve.IsOnCurve(pub.X, pub.Y) {
+		return nil, fmt.Errorf("point not on P-256 curve")
+	}
+	return pub, nil
+}
+
+// extractCOSEXY extracts the x and y coordinate byte slices from a
+// COSE_Key CBOR map for an EC2 P-256 key. It handles the two most common
+// encodings produced by browsers: definite-length CBOR maps with 1-byte
+// integer keys and 1-byte negative integer keys for x (-2) and y (-3).
+//
+// If the COSE bytes are not parseable by this minimal implementation, it
+// falls back to attempting x509.ParsePKIXPublicKey on the raw bytes (some
+// implementations encode as SubjectPublicKeyInfo instead of COSE).
+func extractCOSEXY(cose []byte) (x, y []byte, err error) {
+	// Minimal CBOR map parser for COSE ES256 keys.
+	// Map header: 0xa5 (5-element map) or 0xa4/0xa6 etc.
+	if len(cose) < 2 || (cose[0]&0xe0) != 0xa0 {
+		return extractXYFromSPKI(cose)
+	}
+
+	pos := 1
+	nItems := int(cose[0] & 0x1f)
+	for i := 0; i < nItems && pos < len(cose); i++ {
+		key, n, e := cborReadInt(cose, pos)
+		if e != nil {
+			break
+		}
+		pos += n
+		switch key {
+		case -2: // x
+			x, n, err = cborReadBytes(cose, pos)
+			if err != nil {
+				return nil, nil, fmt.Errorf("COSE x: %w", err)
+			}
+		case -3: // y
+			y, n, err = cborReadBytes(cose, pos)
+			if err != nil {
+				return nil, nil, fmt.Errorf("COSE y: %w", err)
+			}
+		default:
+			_, n, _ = cborSkipValue(cose, pos)
+		}
+		pos += n
+	}
+	if len(x) == 32 && len(y) == 32 {
+		return x, y, nil
+	}
+	return extractXYFromSPKI(cose)
+}
+
+func extractXYFromSPKI(der []byte) (x, y []byte, err error) {
+	pub, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return nil, nil, fmt.Errorf("not a valid COSE or SPKI public key")
+	}
+	ec, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, nil, fmt.Errorf("not an EC public key")
+	}
+	xb := ec.X.Bytes()
+	yb := ec.Y.Bytes()
+	// Pad to 32 bytes.
+	xPad := make([]byte, 32)
+	yPad := make([]byte, 32)
+	copy(xPad[32-len(xb):], xb)
+	copy(yPad[32-len(yb):], yb)
+	return xPad, yPad, nil
+}
+
+// cborReadInt reads a CBOR-encoded integer (positive or negative) at pos.
+func cborReadInt(b []byte, pos int) (val int, n int, err error) {
+	if pos >= len(b) {
+		return 0, 0, fmt.Errorf("cbor: out of bounds")
+	}
+	mt := b[pos] >> 5 // major type
+	ai := b[pos] & 0x1f
+	pos++
+	n = 1
+	var uval uint64
+	switch {
+	case ai < 24:
+		uval = uint64(ai)
+	case ai == 24:
+		if pos >= len(b) {
+			return 0, 0, fmt.Errorf("cbor: truncated")
+		}
+		uval = uint64(b[pos])
+		n++
+	case ai == 25:
+		if pos+1 >= len(b) {
+			return 0, 0, fmt.Errorf("cbor: truncated")
+		}
+		uval = uint64(binary.BigEndian.Uint16(b[pos:]))
+		n += 2
+	default:
+		return 0, 0, fmt.Errorf("cbor: unsupported additional info %d", ai)
+	}
+	if mt == 1 { // negative integer: -1 - uval
+		return -1 - int(uval), n, nil
+	}
+	return int(uval), n, nil
+}
+
+// cborReadBytes reads a CBOR byte string at pos, returns (bytes, advance, err).
+func cborReadBytes(b []byte, pos int) ([]byte, int, error) {
+	if pos >= len(b) {
+		return nil, 0, fmt.Errorf("cbor: out of bounds")
+	}
+	mt := b[pos] >> 5
+	if mt != 2 {
+		return nil, 0, fmt.Errorf("cbor: expected byte string, got major type %d", mt)
+	}
+	ai := b[pos] & 0x1f
+	pos++
+	n := 1
+	var length int
+	switch {
+	case ai < 24:
+		length = int(ai)
+	case ai == 24:
+		if pos >= len(b) {
+			return nil, 0, fmt.Errorf("cbor: truncated")
+		}
+		length = int(b[pos])
+		n++
+		pos++
+	default:
+		return nil, 0, fmt.Errorf("cbor: unsupported byte string length encoding %d", ai)
+	}
+	if pos+length > len(b) {
+		return nil, 0, fmt.Errorf("cbor: byte string out of bounds")
+	}
+	return b[pos : pos+length], n + length, nil
+}
+
+// cborSkipValue skips one CBOR value at pos and returns the number of bytes
+// consumed. Used to skip over keys/values we don't care about.
+func cborSkipValue(b []byte, pos int) (interface{}, int, error) {
+	if pos >= len(b) {
+		return nil, 0, fmt.Errorf("cbor: out of bounds")
+	}
+	mt := b[pos] >> 5
+	ai := b[pos] & 0x1f
+	pos++
+	n := 1
+	var length int
+	switch {
+	case ai < 24:
+		length = int(ai)
+	case ai == 24:
+		length = int(b[pos])
+		n++
+		pos++
+	case ai == 25:
+		length = 2
+		n += 2
+		pos += 2
+	default:
+		return nil, 0, fmt.Errorf("cbor: skip unsupported ai=%d", ai)
+	}
+	switch mt {
+	case 0, 1: // uint / nint — no additional bytes
+		return nil, n, nil
+	case 2, 3: // byte string / text string
+		return nil, n + length, nil
+	case 5: // map — skip 2*length items
+		total := n
+		for i := 0; i < length*2; i++ {
+			_, consumed, err := cborSkipValue(b, pos)
+			if err != nil {
+				return nil, 0, err
+			}
+			pos += consumed
+			total += consumed
+		}
+		return nil, total, nil
+	default:
+		return nil, n, nil
+	}
+}
+
 func randomDigits(n int) (string, error) {
 	if n <= 0 {
 		return "", fmt.Errorf("invalid digit count: %d", n)

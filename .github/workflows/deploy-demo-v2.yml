@@ -1028,7 +1028,7 @@ jobs:
           fi
 
           echo "Uploading plugin configs (always, so envsubst placeholders are rendered)..."
-          export AC_PRIVATE_IP='${{ needs.configure.outputs.ac2_private_ip }}'
+          export AC_PRIVATE_IP='${{ needs.configure.outputs.ac_private_ip }}'
           for plugin_dir in ./artifact/plugins/*/; do
             name=$(basename "$plugin_dir")
             if [ -d "${plugin_dir}etc" ]; then

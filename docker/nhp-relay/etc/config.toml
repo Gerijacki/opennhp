@@ -68,17 +68,18 @@ logLevel = 2
 # nhp/common/clusterconfig for the canonical reference.
 
 [[Servers]]
-Name         = "demo"
-PubKeyBase64 = "4/p0mIknwmVIMocRLQKil7xIthgEdZNncv9UagiBaK2kpcH7i4hEtZjpcHox+Bn7xdV+rBKNbKlV9ye6V1VCLA=="
-LoadBalance  = "round-robin"
-ExpireTime   = 1924991999
+Name           = "demo"
+PubKeyBase64   = "4/p0mIknwmVIMocRLQKil7xIthgEdZNncv9UagiBaK2kpcH7i4hEtZjpcHox+Bn7xdV+rBKNbKlV9ye6V1VCLA=="
+LoadBalance    = "round-robin"
+StickyInstance = true
+ExpireTime     = 1924991999
 
   [[Servers.Instances]]
   Host   = "177.7.0.9"   # nhp-server
   Port   = 62206
   Weight = 1
 
-  [[Servers.Instances]]
-  Host   = "177.7.0.14"  # nhp-server-2 (same keypair, second instance)
-  Port   = 62206
-  Weight = 1
+  # [[Servers.Instances]]
+  # Host   = "177.7.0.14"  # nhp-server-2 (same keypair, second instance)
+  # Port   = 62206
+  # Weight = 1

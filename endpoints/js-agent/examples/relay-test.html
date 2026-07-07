@@ -1362,8 +1362,7 @@ if (result.success) {
     const row = document.getElementById('clusterRow');
     const sel = document.getElementById('clusterSelect');
     if (!row || !sel) return;
-    // Only show the picker when config.json defines more than one cluster.
-    if (!Array.isArray(clusters) || clusters.length < 2) {
+    if (!Array.isArray(clusters) || clusters.length === 0) {
       row.style.display = 'none';
       return;
     }
@@ -1371,11 +1370,10 @@ if (result.success) {
     clusters.forEach((c, i) => {
       const opt = document.createElement('option');
       opt.value = String(i);
+      const cs = (c.cipherScheme === 'curve25519' || c.cipherScheme === 0) ? 'Curve' : 'GMSM';
       const host = c.serverHost ? ` — ${c.serverHost}` : '';
-      opt.textContent = `${c.name || ('Cluster ' + (i + 1))}${host}`;
+      opt.textContent = `${c.name || ('Cluster ' + (i + 1))} (${cs})${host}`;
       opt.dataset.pubkey = c.serverPublicKey || '';
-      // Per-cluster agent key; falls back to empty so the shared flat
-      // agentPrivateKey field is left untouched when a cluster omits it.
       opt.dataset.agentkey = c.agentPrivateKey || '';
       sel.appendChild(opt);
     });

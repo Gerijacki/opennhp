@@ -246,6 +246,8 @@ export interface AgentOTPMsg {
   orgId?: string;
   /** Auth Service Provider ID */
   aspId: string;
+  /** Agent public key (base64) — bound to this OTP at issuance to prevent stolen-OTP attacks */
+  pubKey?: string;
   /** User data map (optional) — e.g. email address under "email" key */
   usrData?: Record<string, unknown>;
 }
@@ -265,6 +267,8 @@ export interface AgentRegisterMsg {
   aspId: string;
   /** One-time password received via email */
   otp: string;
+  /** Public key to register (base64) — the key whose private key the user holds */
+  pubKey?: string;
   /** User data map (optional) */
   usrData?: Record<string, unknown>;
 }

@@ -71,6 +71,7 @@ func (s *AgentKeyStore) migrate() error {
 		usr_id     TEXT NOT NULL,
 		dev_id     TEXT NOT NULL,
 		otp_code   TEXT NOT NULL,
+		pub_key    TEXT NOT NULL DEFAULT '',
 		created_at INTEGER NOT NULL,
 		expires_at INTEGER NOT NULL,
 		used       INTEGER DEFAULT 0,
@@ -121,9 +122,10 @@ const MaxDistinctDevicesPerUserPerWindow = 5
 
 // OTPParams holds the parameters for generating an OTP.
 type OTPParams struct {
-	UserId   string
-	DeviceId string
-	TTL      time.Duration // OTP validity period; defaults to 5 minutes if <= 0
+	UserId    string
+	DeviceId  string
+	PublicKey string        // base64-encoded agent public key; bound to the OTP at issuance
+	TTL       time.Duration // OTP validity period; defaults to 5 minutes if <= 0
 	// CooldownSeconds is the minimum interval between successive OTP
 	// generations for the same user+device. Zero means use the package
 	// default (OTPCooldownSeconds). A negative value disables the
@@ -205,8 +207,8 @@ func (s *AgentKeyStore) GenerateOTP(p OTPParams) (string, error) {
 	)
 
 	_, err = s.db.Exec(
-		`INSERT INTO otp_records (usr_id, dev_id, otp_code, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
-		p.UserId, p.DeviceId, code, now, expires,
+		`INSERT INTO otp_records (usr_id, dev_id, otp_code, pub_key, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		p.UserId, p.DeviceId, code, p.PublicKey, now, expires,
 	)
 	if err != nil {
 		return "", fmt.Errorf("keystore: insert otp: %w", err)
@@ -227,22 +229,24 @@ const MaxOTPAttempts = 5
 //	ErrOTPExpired     — OTP has expired
 //	ErrOTPAlreadyUsed — OTP was already used
 //	ErrOTPRateLimited — too many failed attempts; OTP has been invalidated
+//	ErrOTPPublicKeyMismatch — OTP was issued for a different public key
 //
 // Each incorrect guess increments an attempt counter on the pending OTP.
 // After MaxOTPAttempts failures the OTP is invalidated and ErrOTPRateLimited
 // is returned. A successful validation resets the counter.
-func (s *AgentKeyStore) ValidateOTP(userId, deviceId, code string) error {
+func (s *AgentKeyStore) ValidateOTP(userId, deviceId, code, pubKey string) error {
 	// Try exact match first — the common success path.
 	var id int64
 	var expiresAt int64
 	var used int
 	var attempts int
+	var storedPubKey string
 	err := s.db.QueryRow(
-		`SELECT id, expires_at, used, attempts FROM otp_records
+		`SELECT id, expires_at, used, attempts, pub_key FROM otp_records
 		 WHERE usr_id = ? AND dev_id = ? AND otp_code = ?
 		 ORDER BY created_at DESC LIMIT 1`,
 		userId, deviceId, code,
-	).Scan(&id, &expiresAt, &used, &attempts)
+	).Scan(&id, &expiresAt, &used, &attempts, &storedPubKey)
 
 	if err == nil {
 		// Code matched.
@@ -254,6 +258,10 @@ func (s *AgentKeyStore) ValidateOTP(userId, deviceId, code string) error {
 		}
 		if time.Now().Unix() > expiresAt {
 			return common.ErrOTPExpired
+		}
+		// Verify the registering public key matches the one bound at OTP issuance.
+		if storedPubKey != "" && pubKey != storedPubKey {
+			return common.ErrOTPPublicKeyMismatch
 		}
 		// Mark as used — reset attempts to 0 on success.
 		_, err = s.db.Exec(`UPDATE otp_records SET used = 1, attempts = 0 WHERE id = ?`, id)

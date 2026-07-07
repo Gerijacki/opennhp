@@ -267,7 +267,7 @@ func TestGenerateOTP_ValidateOTP_Success(t *testing.T) {
 		t.Fatalf("expected 6-digit OTP, got %q", code)
 	}
 
-	if err := s.ValidateOTP("alice", "dev1", code); err != nil {
+	if err := s.ValidateOTP("alice", "dev1", code, ""); err != nil {
 		t.Fatalf("ValidateOTP correct code: %v", err)
 	}
 }
@@ -281,13 +281,13 @@ func TestValidateOTP_WrongCode(t *testing.T) {
 	}
 
 	// Wrong code should return ErrOTPInvalid.
-	err = s.ValidateOTP("alice", "dev1", "000000")
+	err = s.ValidateOTP("alice", "dev1", "000000", "")
 	if !errors.Is(err, common.ErrOTPInvalid) {
 		t.Fatalf("expected ErrOTPInvalid, got %v", err)
 	}
 
 	// Correct code must still work after a single wrong guess.
-	if err := s.ValidateOTP("alice", "dev1", code); err != nil {
+	if err := s.ValidateOTP("alice", "dev1", code, ""); err != nil {
 		t.Fatalf("ValidateOTP correct code after wrong guess: %v", err)
 	}
 }
@@ -300,12 +300,12 @@ func TestValidateOTP_AlreadyUsed(t *testing.T) {
 		t.Fatalf("GenerateOTP: %v", err)
 	}
 
-	if err := s.ValidateOTP("alice", "dev1", code); err != nil {
+	if err := s.ValidateOTP("alice", "dev1", code, ""); err != nil {
 		t.Fatalf("first ValidateOTP: %v", err)
 	}
 
 	// Second use must return ErrOTPAlreadyUsed.
-	err = s.ValidateOTP("alice", "dev1", code)
+	err = s.ValidateOTP("alice", "dev1", code, "")
 	if !errors.Is(err, common.ErrOTPAlreadyUsed) {
 		t.Fatalf("expected ErrOTPAlreadyUsed, got %v", err)
 	}
@@ -321,7 +321,7 @@ func TestValidateOTP_Expired(t *testing.T) {
 
 	time.Sleep(2500 * time.Millisecond)
 
-	err = s.ValidateOTP("alice", "dev1", code)
+	err = s.ValidateOTP("alice", "dev1", code, "")
 	if !errors.Is(err, common.ErrOTPExpired) {
 		t.Fatalf("expected ErrOTPExpired, got %v", err)
 	}
@@ -342,7 +342,7 @@ func TestValidateOTP_RateLimit(t *testing.T) {
 
 	// Exhaust attempts.
 	for i := 0; i < MaxOTPAttempts; i++ {
-		err = s.ValidateOTP("alice", "dev1", wrong)
+		err = s.ValidateOTP("alice", "dev1", wrong, "")
 		if i < MaxOTPAttempts-1 {
 			if !errors.Is(err, common.ErrOTPInvalid) {
 				t.Fatalf("attempt %d: expected ErrOTPInvalid, got %v", i+1, err)
@@ -355,7 +355,7 @@ func TestValidateOTP_RateLimit(t *testing.T) {
 	}
 
 	// After rate-limit, even the correct code must fail (OTP invalidated).
-	err = s.ValidateOTP("alice", "dev1", code)
+	err = s.ValidateOTP("alice", "dev1", code, "")
 	if !errors.Is(err, common.ErrOTPInvalid) {
 		t.Fatalf("after rate-limit: expected ErrOTPInvalid, got %v", err)
 	}
@@ -380,14 +380,37 @@ func TestGenerateOTP_InvalidatesPrevious(t *testing.T) {
 	}
 
 	// First OTP should now be used=1 (invalidated by the second GenerateOTP).
-	err = s.ValidateOTP("alice", "dev1", code1)
+	err = s.ValidateOTP("alice", "dev1", code1, "")
 	if !errors.Is(err, common.ErrOTPAlreadyUsed) {
 		t.Fatalf("expected ErrOTPAlreadyUsed for old OTP, got %v", err)
 	}
 
 	// Second OTP should still work.
-	if err := s.ValidateOTP("alice", "dev1", code2); err != nil {
+	if err := s.ValidateOTP("alice", "dev1", code2, ""); err != nil {
 		t.Fatalf("ValidateOTP code2: %v", err)
+	}
+}
+
+func TestValidateOTP_PublicKeyMismatch(t *testing.T) {
+	s, _, _ := newTestStore(t)
+
+	const pubKeyA = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	const pubKeyB = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+
+	code, err := s.GenerateOTP(OTPParams{UserId: "alice", DeviceId: "dev1", PublicKey: pubKeyA, TTL: 5 * time.Minute})
+	if err != nil {
+		t.Fatalf("GenerateOTP: %v", err)
+	}
+
+	// Correct code but wrong public key must be rejected.
+	err = s.ValidateOTP("alice", "dev1", code, pubKeyB)
+	if !errors.Is(err, common.ErrOTPPublicKeyMismatch) {
+		t.Fatalf("expected ErrOTPPublicKeyMismatch, got %v", err)
+	}
+
+	// Correct code with correct public key must succeed.
+	if err := s.ValidateOTP("alice", "dev1", code, pubKeyA); err != nil {
+		t.Fatalf("ValidateOTP with matching pubKey: %v", err)
 	}
 }
 
@@ -457,7 +480,7 @@ func TestSweepStaleOTPs_DeletesUsedAndExpired(t *testing.T) {
 	}
 
 	// Use code1 (marks used=1).
-	if err := s.ValidateOTP("alice", "dev1", code1); err != nil {
+	if err := s.ValidateOTP("alice", "dev1", code1, ""); err != nil {
 		t.Fatalf("ValidateOTP code1: %v", err)
 	}
 
@@ -501,7 +524,7 @@ func TestSweepStaleOTPs_PreservesPending(t *testing.T) {
 	}
 
 	// Pending OTP must still validate.
-	if err := s.ValidateOTP("alice", "dev1", code); err != nil {
+	if err := s.ValidateOTP("alice", "dev1", code, ""); err != nil {
 		t.Fatalf("ValidateOTP after sweep: %v", err)
 	}
 }

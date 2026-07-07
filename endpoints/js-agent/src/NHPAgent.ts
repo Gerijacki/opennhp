@@ -376,6 +376,7 @@ export class NHPAgent {
         devId: this.identity.deviceId,
         orgId: this.identity.organizationId,
         aspId: serviceId,
+        pubKey: this.getPublicKey(),
         usrData: userData,
       };
 
@@ -445,6 +446,7 @@ export class NHPAgent {
         orgId: this.identity.organizationId,
         aspId: serviceId,
         otp,
+        pubKey: this.getPublicKey(),
         usrData: userData,
       };
 

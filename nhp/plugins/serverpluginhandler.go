@@ -180,7 +180,7 @@ type SessionClearFunc func(ctx *gin.Context)
 // interact with the server's AgentKeyStore without directly accessing
 // the database.
 type PluginOTPGenerateFunc func(userId, deviceId string, ttlSeconds int64) (otpCode string, err error)
-type PluginOTPValidateFunc func(userId, deviceId, otpCode string) error
+type PluginOTPValidateFunc func(userId, deviceId, otpCode, pubKey string) error
 type PluginRegisterKeyFunc func(userId, deviceId, pubKeyBase64 string) error
 type PluginIsRegisteredFunc func(userId, deviceId string) (bool, error)
 

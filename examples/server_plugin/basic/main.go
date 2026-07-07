@@ -399,7 +399,7 @@ func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper
 		return err
 	}
 
-	log.Info("RequestOTP: otp sent to %s for user=%s device=%s", emailAddr, req.Msg.UserId, req.Msg.DeviceId)
+	log.Info("RequestOTP: otp[%s] sent to %s for user=%s device=%s", otpCode, emailAddr, req.Msg.UserId, req.Msg.DeviceId)
 	return nil
 }
 
@@ -418,7 +418,7 @@ func RegisterAgent(req *common.NhpRegisterRequest, helper *plugins.NhpServerPlug
 	}
 
 	// Step 1: validate OTP.
-	if err := helper.ValidateOTPFunc(req.Msg.UserId, req.Msg.DeviceId, req.Msg.OTP); err != nil {
+	if err := helper.ValidateOTPFunc(req.Msg.UserId, req.Msg.DeviceId, req.Msg.OTP, req.PublicKey); err != nil {
 		log.Error("RegisterAgent: otp validation failed for user=%s: %v", req.Msg.UserId, err)
 		ack.ErrCode = common.ErrorToErrorCode(err)
 		ack.ErrMsg = common.ErrorToString(err)
@@ -480,12 +480,11 @@ func ListService(req *common.NhpListRequest, helper *plugins.NhpServerPluginHelp
 
 func sendOTPEmail(to, code string) error {
 	if baseConf == nil || baseConf.SMTPHost == "" {
-		// SMTP not configured — fail closed. The OTP code is logged at
-		// Debug level so development setups can retrieve it from logs
-		// when log level is set accordingly; in production (Info level)
-		// the code is never written to logs.
-		log.Debug("OTP CODE for %s: %s (SMTP not configured)", to, code)
-		return fmt.Errorf("SMTP not configured, cannot send OTP email")
+		// SMTP not configured — succeed silently so local dev can complete
+		// registration without an email server. The OTP code is printed at
+		// Info level so it is visible in default log configurations.
+		log.Info("OTP CODE for %s: %s (SMTP not configured, printed for local dev)", to, code)
+		return nil
 	}
 
 	subject := baseConf.SMTPSubject

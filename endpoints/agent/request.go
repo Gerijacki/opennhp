@@ -18,6 +18,7 @@ func (a *UdpAgent) RequestOtp(target *KnockTarget) error {
 		DeviceId:       a.deviceId,
 		OrganizationId: a.knockUser.OrganizationId,
 		AuthServiceId:  target.AuthServiceId,
+		PublicKey:      a.device.PublicKeyBase64(),
 		UserData:       a.knockUser.UserData,
 	}
 	a.knockUserMutex.RUnlock()
@@ -82,6 +83,7 @@ func (a *UdpAgent) RegisterPublicKey(otp string, target *KnockTarget) (rakMsg *c
 		OrganizationId: a.knockUser.OrganizationId,
 		AuthServiceId:  target.AuthServiceId,
 		OTP:            otp,
+		PublicKey:      a.device.PublicKeyBase64(),
 		UserData:       a.knockUser.UserData,
 	}
 	a.knockUserMutex.RUnlock()

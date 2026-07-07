@@ -186,7 +186,8 @@ func (s *UdpServer) HandleOTPRequest(ppd *core.PacketParserData) (err error) {
 	}
 
 	otpReq := &common.NhpOTPRequest{
-		Msg: otpMsg,
+		Msg:       otpMsg,
+		PublicKey: otpMsg.PublicKey,
 		SrcAddr: &common.NetAddress{
 			Ip:   ppd.ConnData.RemoteAddr.IP.String(),
 			Port: ppd.ConnData.RemoteAddr.Port,
@@ -231,16 +232,19 @@ func (s *UdpServer) HandleRegisterRequest(ppd *core.PacketParserData) (err error
 			return
 		}
 
-		agentPubkey := base64.StdEncoding.EncodeToString(ppd.RemotePubKey)
-
 		regReq := &common.NhpRegisterRequest{
 			Msg:       regMsg,
 			Ack:       rakMsg,
-			PublicKey: agentPubkey,
+			PublicKey: regMsg.PublicKey,
 			SrcAddr: &common.NetAddress{
 				Ip:   ppd.ConnData.RemoteAddr.IP.String(),
 				Port: ppd.ConnData.RemoteAddr.Port,
 			},
+		}
+		// The Noise handshake already carries the agent's static public key;
+		// use it as an authoritative fallback when the message body omits pubKey.
+		if regReq.PublicKey == "" && ppd.RemotePubKey != nil {
+			regReq.PublicKey = base64.StdEncoding.EncodeToString(ppd.RemotePubKey)
 		}
 
 		rakMsg, err = handler.RegisterAgent(regReq, s.NewNhpServerHelper(ppd))

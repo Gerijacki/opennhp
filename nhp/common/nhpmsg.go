@@ -34,6 +34,7 @@ type AgentOTPMsg struct {
 	OrganizationId string         `json:"orgId,omitempty"`
 	AuthServiceId  string         `json:"aspId"`
 	Passcode       string         `json:"pass,omitempty"`
+	PublicKey      string         `json:"pubKey,omitempty"`
 	UserData       map[string]any `json:"usrData,omitempty"`
 }
 
@@ -43,6 +44,7 @@ type AgentRegisterMsg struct {
 	OrganizationId string         `json:"orgId,omitempty"`
 	AuthServiceId  string         `json:"aspId"`
 	OTP            string         `json:"otp,omitempty"`
+	PublicKey      string         `json:"pubKey,omitempty"`
 	UserData       map[string]any `json:"usrData,omitempty"`
 }
 

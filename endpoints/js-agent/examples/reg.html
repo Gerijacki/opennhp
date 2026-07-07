@@ -116,13 +116,9 @@
     </div>
     <hr>
     <div class="field">
-      <label for="email">Email <span style="font-weight:400;color:#8b949e">(User ID — the OTP code is sent here)</span></label>
+      <label for="email">Email <span style="font-weight:400;color:#8b949e">(used as User ID — the OTP code is sent here)</span></label>
       <input type="email" id="email" placeholder="alice@example.com" autocomplete="email" required>
       <div class="hint">Used as both your user identity and OTP delivery address.</div>
-    </div>
-    <div class="field">
-      <label for="user-id">User ID <span style="font-weight:400;color:#484f58">(optional, defaults to email)</span></label>
-      <input type="text" id="user-id" placeholder="alice@example.com" autocomplete="username">
     </div>
     <div class="field">
       <label for="device-id">Device ID</label>
@@ -187,10 +183,10 @@ import { encode as cborEncode } from 'cbor-x';
 
 // ── State ──
 let agent = null;
-let servers = [];          // merged list: /servers API + config.json clusters
+let servers = [];          // populated from config.json clusters
 let selectedServer = null;
 let cipherScheme = 'gmsm';
-let configClusters = [];   // clusters from config.json, deduped later
+let configClusters = [];   // clusters from config.json
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -203,14 +199,7 @@ function showStep(name) {
 
 window.goToIdentityStep = () => showStep('identity');
 
-// ── Server discovery ──
-let relayInputTimer = null;
-$('#relay-url').addEventListener('input', () => {
-  clearTimeout(relayInputTimer);
-  relayInputTimer = setTimeout(discoverServers, 500);
-});
-$('#relay-url').addEventListener('change', discoverServers);
-
+// ── Server list ──
 $('#server-select').addEventListener('change', () => {
   const idx = parseInt($('#server-select').value);
   if (!isNaN(idx) && servers[idx]) {
@@ -220,55 +209,35 @@ $('#server-select').addEventListener('change', () => {
       ? '<span class="badge badge-curve">Curve25519</span>'
       : '<span class="badge badge-gmsm">GMSM/SM2</span>';
     $('#server-detail').innerHTML = `Fingerprint: ${selectedServer.id} ${badge}`;
+    agent = null; // reset so initAgent() re-creates with the new server
   }
 });
 
-async function discoverServers() {
-  const relayUrl = $('#relay-url').value.trim();
+function populateServers() {
   const sel = $('#server-select');
-  sel.disabled = true;
-  sel.innerHTML = '<option value="">Discovering...</option>';
-
-  // 1. Fetch from relay /servers API.
-  let relayServers = [];
-  if (relayUrl) {
-    try {
-      const base = relayUrl.replace(/\/relay\/?$/, '');
-      const resp = await fetch(base + '/servers');
-      if (resp.ok) relayServers = await resp.json();
-    } catch (_) {}
-  }
-
-  // 2. Merge config.json clusters (dedupe by publicKeyBase64).
-  const seen = new Set();
-  servers = [];
-  const add = (s) => {
-    const key = s.publicKeyBase64 || s.serverPublicKey;
-    if (!key || seen.has(key)) return;
-    seen.add(key);
-    servers.push({
-      id: s.id || key.substring(0, 11),
-      name: s.name || '',
-      publicKeyBase64: key,
-      cipherScheme: s.cipherScheme ?? 1, // default GMSM
-    });
-  };
-  relayServers.forEach(add);
-  configClusters.forEach(add);
+  servers = configClusters.filter(c => c.publicKeyBase64).map((c, i) => ({
+    id: c.publicKeyBase64.substring(0, 11),
+    name: c.name || `Server ${i + 1}`,
+    serverHost: c.serverHost || '',
+    publicKeyBase64: c.publicKeyBase64,
+    cipherScheme: c.cipherScheme ?? 1,
+  }));
 
   if (servers.length === 0) {
-    sel.innerHTML = '<option value="">No servers found</option>';
+    sel.innerHTML = '<option value="">No servers in config.json</option>';
+    sel.disabled = true;
     return;
   }
 
   sel.innerHTML = servers.map((s, i) => {
     const cs = s.cipherScheme === 0 ? 'Curve' : 'GMSM';
-    const name = s.name || `Server ${i + 1}`;
-    return `<option value="${i}">${name} (${cs}) — ${s.id}</option>`;
+    const host = s.serverHost ? ` — ${s.serverHost}` : '';
+    return `<option value="${i}">${s.name} (${cs})${host}</option>`;
   }).join('');
   sel.disabled = false;
   $('#server-count').textContent = `(${servers.length} available)`;
-  if (selectedServer === null) { sel.value = '0'; sel.dispatchEvent(new Event('change')); }
+  sel.value = '0';
+  sel.dispatchEvent(new Event('change'));
 }
 
 // ── Registration flow ──
@@ -276,8 +245,6 @@ window.goToOtpStep = async () => {
   // Email is the primary identity — User ID defaults to it.
   const email = $('#email').value.trim();
   if (!email) { showAlert('Please enter your email (used as both user ID and OTP address)', 'error'); return; }
-  const userId = $('#user-id').value.trim() || email;
-  $('#user-id').value = userId;
   if (!selectedServer) { showAlert('Please select a target server', 'error'); return; }
 
   showStep('otp');
@@ -315,7 +282,7 @@ window.doRegister = async () => {
     if (result.success) {
       // Save to localStorage so relay-test.html can import it.
       const regData = {
-        userId: $('#user-id').value.trim(),
+        userId: $('#email').value.trim(),
         deviceId: $('#device-id').value.trim(),
         privateKey: agent.getPrivateKey(),
         publicKey: agent.getPublicKey(),
@@ -382,7 +349,7 @@ window.goKnock = () => {
     fragment = encodeURIComponent(JSON.stringify({
       privateKey:      agent.getPrivateKey(),
       publicKey:       agent.getPublicKey(),
-      userId:          $('#user-id').value.trim(),
+      userId:          $('#email').value.trim(),
       deviceId:        $('#device-id').value.trim(),
       cipherScheme,
       serverPublicKey: selectedServer.publicKeyBase64,
@@ -403,7 +370,7 @@ function buildCborToken() {
   const obj = {
     privateKey:      agent.getPrivateKey(),
     publicKey:       agent.getPublicKey(),
-    userId:          $('#user-id').value.trim(),
+    userId:          $('#email').value.trim(),
     deviceId:        $('#device-id').value.trim(),
     cipherScheme,
     serverPublicKey: selectedServer.publicKeyBase64,
@@ -435,7 +402,7 @@ window.copyCborToken = async () => {
 
 window.downloadKey = () => {
   const blob = new Blob([JSON.stringify({
-    userId: $('#user-id').value.trim(),
+    userId: $('#email').value.trim(),
     deviceId: $('#device-id').value.trim(),
     serverId: selectedServer?.id,
     serverName: selectedServer?.name,
@@ -447,7 +414,7 @@ window.downloadKey = () => {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `nhp-agent-key-${$('#user-id').value.trim()}.json`;
+  a.download = `nhp-agent-key-${$('#email').value.trim()}.json`;
   a.click();
   URL.revokeObjectURL(url);
 };
@@ -467,7 +434,7 @@ async function initAgent() {
   const deviceId = $('#device-id').value.trim() || generateDeviceId();
   if (!$('#device-id').value.trim()) $('#device-id').value = deviceId;
   agent.setIdentity({
-    userId: $('#user-id').value.trim(),
+    userId: $('#email').value.trim(),
     deviceId: deviceId,
     organizationId: $('#org-id').value.trim() || undefined,
   });
@@ -498,19 +465,19 @@ function generateDeviceId() {
       const cfg = await resp.json();
       if (cfg.relayUrl) $('#relay-url').value = cfg.relayUrl;
       if (cfg.serviceId) $('#asp-id').value = cfg.serviceId;
-      if (cfg.userId) $('#user-id').value = cfg.userId;
       if (cfg.cipherScheme) cipherScheme = cfg.cipherScheme;
-      // Store clusters for merging with /servers discovery.
       if (Array.isArray(cfg.clusters)) {
+        const cs = cfg.cipherScheme === 'curve25519' ? 0 : 1;
         configClusters = cfg.clusters.map(c => ({
           name: c.name || '',
+          serverHost: c.serverHost || '',
           publicKeyBase64: c.serverPublicKey || '',
-          cipherScheme: cfg.cipherScheme === 'curve25519' ? 0 : 1,
+          cipherScheme: cs,
         }));
       }
     }
   } catch (_) {}
-  await discoverServers();
+  populateServers();
 })();
 </script>
 </body>

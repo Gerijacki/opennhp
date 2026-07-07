@@ -63,7 +63,8 @@ func (s *AgentKeyStore) Close() error {
 	return s.db.Close()
 }
 
-// migrate creates tables if they do not exist.
+// migrate creates tables if they do not exist and applies incremental schema
+// changes to existing databases.
 func (s *AgentKeyStore) migrate() error {
 	ddl := `
 	CREATE TABLE IF NOT EXISTS otp_records (
@@ -94,8 +95,34 @@ func (s *AgentKeyStore) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_agent_pubkey ON agent_keys(public_key);
 	CREATE INDEX IF NOT EXISTS idx_agent_expires ON agent_keys(expires_at);
 	`
-	_, err := s.db.Exec(ddl)
-	return err
+	if _, err := s.db.Exec(ddl); err != nil {
+		return err
+	}
+
+	// Incremental migrations: add columns that may be absent in older databases.
+	migrations := []struct {
+		table  string
+		column string
+		ddl    string
+	}{
+		{"otp_records", "pub_key", "ALTER TABLE otp_records ADD COLUMN pub_key TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, m := range migrations {
+		var exists int
+		err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`,
+			m.table, m.column,
+		).Scan(&exists)
+		if err != nil {
+			return fmt.Errorf("keystore: check column %s.%s: %w", m.table, m.column, err)
+		}
+		if exists == 0 {
+			if _, err := s.db.Exec(m.ddl); err != nil {
+				return fmt.Errorf("keystore: migrate %s.%s: %w", m.table, m.column, err)
+			}
+		}
+	}
+	return nil
 }
 
 // ── OTP operations ────────────────────────────────────────────────────────

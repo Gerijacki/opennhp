@@ -106,6 +106,7 @@ func (s *AgentKeyStore) migrate() error {
 		ddl    string
 	}{
 		{"otp_records", "pub_key", "ALTER TABLE otp_records ADD COLUMN pub_key TEXT NOT NULL DEFAULT ''"},
+		{"otp_records", "attempts", "ALTER TABLE otp_records ADD COLUMN attempts INTEGER DEFAULT 0"},
 	}
 	for _, m := range migrations {
 		var exists int

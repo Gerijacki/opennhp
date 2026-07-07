@@ -479,7 +479,12 @@ func ListService(req *common.NhpListRequest, helper *plugins.NhpServerPluginHelp
 // ── Email helper ─────────────────────────────────────────────────────────
 
 func sendOTPEmail(to, code string) error {
-	if baseConf == nil || baseConf.SMTPHost == "" {
+	smtpHost := ""
+	if baseConf != nil {
+		smtpHost = baseConf.SMTPHost
+	}
+	// Treat unsubstituted envsubst placeholders as unconfigured.
+	if smtpHost == "" || strings.HasPrefix(smtpHost, "${") {
 		// SMTP not configured — succeed silently so local dev can complete
 		// registration without an email server. The OTP code is printed at
 		// Info level so it is visible in default log configurations.

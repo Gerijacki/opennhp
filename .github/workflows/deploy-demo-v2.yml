@@ -602,34 +602,38 @@ jobs:
             scp ./artifact/server/nhp-serverd nhp-server:$REMOTE_DIR/
             ssh nhp-server "chmod +x $REMOTE_DIR/nhp-serverd"
 
-            echo "Uploading plugins..."
-            # Render placeholders in plugin configs before upload
+            echo "Uploading plugin binaries..."
             export AC_PRIVATE_IP='${{ needs.configure.outputs.ac_private_ip }}'
             for plugin_dir in ./artifact/plugins/*/; do
               name=$(basename "$plugin_dir")
               ssh nhp-server "mkdir -p $REMOTE_DIR/plugins/$name"
               scp "${plugin_dir}${name}.so" "nhp-server:$REMOTE_DIR/plugins/$name/"
-
-              if [ -d "${plugin_dir}etc" ]; then
-                # Render envsubst on any *.toml in etc/ so values like
-                # ${AC_PRIVATE_IP} get substituted at deploy time.
-                rendered_etc=$(mktemp -d)
-                cp -r "${plugin_dir}etc/." "$rendered_etc/"
-                for f in "$rendered_etc"/*.toml; do
-                  [ -f "$f" ] || continue
-                  envsubst '$AC_PRIVATE_IP $SMTP_HOST $SMTP_PORT $SMTP_USERNAME $SMTP_PASSWORD $SMTP_FROM $SMTP_SUBJECT' < "$f" > "$f.rendered"
-                  mv "$f.rendered" "$f"
-                done
-                ssh nhp-server "mkdir -p $REMOTE_DIR/plugins/$name/etc"
-                scp -r "$rendered_etc/." "nhp-server:$REMOTE_DIR/plugins/$name/etc/"
-                rm -rf "$rendered_etc"
-              fi
             done
 
             if [ -d ./artifact/templates ]; then
               rsync -avz --delete -e ssh ./artifact/templates/ nhp-server:$REMOTE_DIR/templates/
             fi
           fi
+
+          echo "Uploading plugin configs (always, so envsubst placeholders are rendered)..."
+          export AC_PRIVATE_IP='${{ needs.configure.outputs.ac_private_ip }}'
+          for plugin_dir in ./artifact/plugins/*/; do
+            name=$(basename "$plugin_dir")
+            if [ -d "${plugin_dir}etc" ]; then
+              # Render envsubst on any *.toml in etc/ so values like
+              # ${AC_PRIVATE_IP} and ${SMTP_HOST} get substituted at deploy time.
+              rendered_etc=$(mktemp -d)
+              cp -r "${plugin_dir}etc/." "$rendered_etc/"
+              for f in "$rendered_etc"/*.toml; do
+                [ -f "$f" ] || continue
+                envsubst '$AC_PRIVATE_IP $SMTP_HOST $SMTP_PORT $SMTP_USERNAME $SMTP_PASSWORD $SMTP_FROM $SMTP_SUBJECT' < "$f" > "$f.rendered"
+                mv "$f.rendered" "$f"
+              done
+              ssh nhp-server "mkdir -p $REMOTE_DIR/plugins/$name/etc"
+              scp -r "$rendered_etc/." "nhp-server:$REMOTE_DIR/plugins/$name/etc/"
+              rm -rf "$rendered_etc"
+            fi
+          done
 
           echo "Uploading server configs..."
           scp ./configs/server/*.toml nhp-server:$REMOTE_DIR/etc/
@@ -963,6 +967,36 @@ jobs:
         with:
           name: nhp-demo-configs
           path: ./configs
+
+      - name: Load SMTP credentials for OTP email
+        run: |
+          SECRET_JSON=$(aws secretsmanager get-secret-value \
+            --secret-id nhp-agent/ses-smtp \
+            --region us-east-2 \
+            --query 'SecretString' --output text)
+
+          SMTP_HOST=$(echo "$SECRET_JSON" | jq -r '.smtp_host // empty')
+          SMTP_PORT=$(echo "$SECRET_JSON" | jq -r '.smtp_port // empty')
+          SMTP_USERNAME=$(echo "$SECRET_JSON" | jq -r '.smtp_username // empty')
+          SMTP_PASSWORD=$(echo "$SECRET_JSON" | jq -r '.smtp_password // empty')
+          SMTP_FROM=$(echo "$SECRET_JSON" | jq -r '.from_address // empty')
+
+          if [ -z "$SMTP_HOST" ] || [ -z "$SMTP_USERNAME" ]; then
+            echo "SMTP not configured — OTP emails will be printed to server log"
+            echo "SMTP_HOST=" >> $GITHUB_ENV
+            echo "SMTP_PORT=" >> $GITHUB_ENV
+            echo "SMTP_USERNAME=" >> $GITHUB_ENV
+            echo "SMTP_PASSWORD=" >> $GITHUB_ENV
+            echo "SMTP_FROM=" >> $GITHUB_ENV
+            echo "SMTP_SUBJECT=" >> $GITHUB_ENV
+          else
+            echo "SMTP_HOST=$SMTP_HOST" >> $GITHUB_ENV
+            echo "SMTP_PORT=${SMTP_PORT:-587}" >> $GITHUB_ENV
+            echo "SMTP_USERNAME=$SMTP_USERNAME" >> $GITHUB_ENV
+            echo "SMTP_PASSWORD=$SMTP_PASSWORD" >> $GITHUB_ENV
+            echo "SMTP_FROM=${SMTP_FROM:-noreply@opennhp.org}" >> $GITHUB_ENV
+            echo "SMTP_SUBJECT=Your OpenNHP Verification Code" >> $GITHUB_ENV
+          fi
 
       - name: Deploy nhp-serverd and plugins (cluster 2)
         run: |

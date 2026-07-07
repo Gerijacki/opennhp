@@ -728,3 +728,51 @@ func TestVerifyWebAuthnAssertion_ShortAuthData(t *testing.T) {
 		t.Fatal("expected short authData error, got nil")
 	}
 }
+
+func TestParseCOSEP256PublicKey_MalformedNoPanic(t *testing.T) {
+	// Regression: cborSkipValue indexed past the buffer on truncated
+	// additional-info bytes, allowing a remotely-triggerable panic via an
+	// attacker-committed PublicKeyCOSE. All malformed inputs must return
+	// an error, never panic.
+	cases := [][]byte{
+		{},                       // empty
+		{0xa1},                   // map(1) with no content
+		{0xa1, 0x01, 0x18},       // map(1), key 1, value ai=24 with no length byte (reviewer PoC)
+		{0xa1, 0x01, 0x19},       // ai=25 with no length bytes
+		{0xa1, 0x01, 0x19, 0x00}, // ai=25 with only one length byte
+		{0xa1, 0x18},             // key itself truncated at ai=24
+		{0xa5, 0x01, 0x02, 0x03, 0x26, 0x20, 0x01, 0x21, 0x58, 0x20}, // x declared 32 bytes, buffer ends
+		{0xa1, 0x01, 0x58, 0xff},                                     // byte string declaring 255 bytes, none present
+		{0xa1, 0x61, 0x41, 0x18},                                     // text key then truncated value
+	}
+	for i, c := range cases {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("case %d (% x): panic: %v", i, c, r)
+				}
+			}()
+			if _, err := parseCOSEP256PublicKey(c); err == nil {
+				t.Errorf("case %d (% x): expected error, got nil", i, c)
+			}
+		}()
+	}
+}
+
+func TestVerifyWebAuthnAssertion_MaliciousCOSENoPanic(t *testing.T) {
+	// End-to-end variant of the reviewer PoC: a well-formed assertion whose
+	// committed COSE key is malicious. Must return an error, not panic.
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	challenge := sha256.Sum256([]byte("123456alicedev1server"))
+	authB64, cdB64, sigB64 := signWebAuthnAssertion(t, priv, challenge[:])
+
+	maliciousCOSE := base64.StdEncoding.EncodeToString([]byte{0xa1, 0x01, 0x18})
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic on malicious COSE: %v", r)
+		}
+	}()
+	if err := VerifyWebAuthnAssertion(maliciousCOSE, authB64, cdB64, sigB64, challenge[:], ""); err == nil {
+		t.Fatal("expected error on malicious COSE key, got nil")
+	}
+}

@@ -911,10 +911,16 @@ func cborSkipValue(b []byte, pos int) (interface{}, int, error) {
 	case ai < 24:
 		length = int(ai)
 	case ai == 24:
+		if pos >= len(b) {
+			return nil, 0, fmt.Errorf("cbor: skip truncated 1-byte length")
+		}
 		length = int(b[pos])
 		n++
 		pos++
 	case ai == 25:
+		if pos+1 >= len(b) {
+			return nil, 0, fmt.Errorf("cbor: skip truncated 2-byte length")
+		}
 		length = 2
 		n += 2
 		pos += 2
@@ -925,6 +931,9 @@ func cborSkipValue(b []byte, pos int) (interface{}, int, error) {
 	case 0, 1: // uint / nint — no additional bytes
 		return nil, n, nil
 	case 2, 3: // byte string / text string
+		if pos+length > len(b) {
+			return nil, 0, fmt.Errorf("cbor: skip string exceeds buffer")
+		}
 		return nil, n + length, nil
 	case 5: // map — skip 2*length items
 		total := n

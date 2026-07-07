@@ -960,6 +960,16 @@ func (s *UdpServer) dispatchHandler(ppd *core.PacketParserData, fn func(*core.Pa
 	}
 	go func(p *core.PacketParserData) {
 		defer func() { <-s.handlerSem }()
+		// Defense-in-depth: a panic in any message handler (e.g. a parsing
+		// bug on attacker-controlled bytes) must degrade to a dropped
+		// request, not tear down the whole server process.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Critical("handler panic recovered for %s from %s: %v",
+					core.HeaderTypeToString(p.HeaderType),
+					p.ConnData.RemoteAddr.String(), r)
+			}
+		}()
 		_ = fn(p)
 	}(ppd)
 }

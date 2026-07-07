@@ -640,7 +640,10 @@ func (s *AgentKeyStore) GetWebAuthnCredential(userId, deviceId string) (credenti
 // expectedChallenge may be nil to skip the challenge check (tests only —
 // production callers MUST pass it, otherwise a captured assertion could
 // be replayed with a different OTP).
-func VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB64 string, expectedChallenge []byte) error {
+// expectedRpId, when non-empty, requires the authenticatorData rpIdHash
+// to equal SHA256(expectedRpId), binding the assertion to the expected
+// WebAuthn Relying Party (origin). Configure via webauthnRpId.
+func VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB64 string, expectedChallenge []byte, expectedRpId string) error {
 	// Decode inputs.
 	coseBytes, err := base64.StdEncoding.DecodeString(publicKeyCOSE)
 	if err != nil {
@@ -669,6 +672,27 @@ func VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB
 		sigBytes, err = base64.RawURLEncoding.DecodeString(sigB64)
 		if err != nil {
 			return fmt.Errorf("webauthn: decode signature: %w", err)
+		}
+	}
+
+	// Structural checks on authenticatorData per the WebAuthn spec:
+	// rpIdHash(32) + flags(1) + signCount(4) = minimum 37 bytes.
+	if len(authData) < 37 {
+		return fmt.Errorf("webauthn: authenticatorData too short (%d bytes, need >= 37)", len(authData))
+	}
+	// User-Present flag (bit 0) must be set — the authenticator must have
+	// tested user presence (touch / biometric / PIN).
+	if authData[32]&0x01 == 0 {
+		return fmt.Errorf("webauthn: user-present flag not set")
+	}
+	// Relying Party binding: the first 32 bytes of authenticatorData are
+	// SHA256 of the RP ID the browser used. When the caller knows the
+	// expected RP ID (webauthnRpId config), require an exact match so an
+	// assertion minted for a different origin is rejected.
+	if expectedRpId != "" {
+		rpIdHash := sha256.Sum256([]byte(expectedRpId))
+		if subtle.ConstantTimeCompare(authData[:32], rpIdHash[:]) != 1 {
+			return fmt.Errorf("webauthn: rpIdHash mismatch (assertion not for RP %q)", expectedRpId)
 		}
 	}
 

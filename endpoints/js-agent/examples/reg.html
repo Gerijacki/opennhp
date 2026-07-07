@@ -220,7 +220,7 @@ $('#server-select').addEventListener('change', () => {
     const badge = cipherScheme === 'curve25519'
       ? '<span class="badge badge-curve">Curve25519</span>'
       : '<span class="badge badge-gmsm">GMSM/SM2</span>';
-    $('#server-detail').innerHTML = `Fingerprint: ${selectedServer.id} ${badge}`;
+    $('#server-detail').innerHTML = `Fingerprint: ${escapeHtml(selectedServer.id)} ${badge}`;
     agent = null; // reset so initAgent() re-creates with the new server
   }
 });
@@ -243,8 +243,8 @@ function populateServers() {
 
   sel.innerHTML = servers.map((s, i) => {
     const cs = s.cipherScheme === 0 ? 'Curve' : 'GMSM';
-    const host = s.serverHost ? ` — ${s.serverHost}` : '';
-    return `<option value="${i}">${s.name} (${cs})${host}</option>`;
+    const host = s.serverHost ? ` — ${escapeHtml(s.serverHost)}` : '';
+    return `<option value="${i}">${escapeHtml(s.name)} (${cs})${host}</option>`;
   }).join('');
   sel.disabled = false;
   $('#server-count').textContent = `(${servers.length} available)`;
@@ -456,9 +456,14 @@ window.doRegister = async () => {
       $('#done-content').innerHTML = `
         <div class="alert alert-success">
           <strong>&check; Registration Successful</strong><br>
-          Server: ${selectedServer.name || selectedServer.id}<br>
+          Server: ${escapeHtml(selectedServer.name || selectedServer.id)}<br>
           Keys saved — keep your private key safe.
         </div>
+        ${useWebAuthn ? `<div class="alert alert-info" style="font-size:12px">
+          Note: the hardware key (WebAuthn) protects the <em>registration proof</em> only.
+          The NHP session key shown below is a software Curve25519 key stored in
+          localStorage / downloadable file — protect it accordingly.
+        </div>` : ''}
         <div class="alert alert-info" style="background:#0d2b1e;border-color:#238636;color:#7ee787">
           ${result.expiresAt !== undefined
             ? `<strong>Key valid until ${new Date(result.expiresAt).toUTCString()}.</strong>

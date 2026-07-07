@@ -565,7 +565,9 @@ func signWebAuthnAssertion(t *testing.T, priv *ecdsa.PrivateKey, challenge []byt
 	clientData := fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":"https://reg.opennhp.org"}`,
 		base64.RawURLEncoding.EncodeToString(challenge))
 	authData := make([]byte, 37) // rpIdHash(32) + flags(1) + signCount(4)
-	authData[32] = 0x01          // UP flag
+	rpIdHash := sha256.Sum256([]byte("reg.opennhp.org"))
+	copy(authData[:32], rpIdHash[:])
+	authData[32] = 0x01 // UP flag
 
 	cdHash := sha256.Sum256([]byte(clientData))
 	signed := append(append([]byte{}, authData...), cdHash[:]...)
@@ -589,7 +591,7 @@ func TestVerifyWebAuthnAssertion_ValidSignature(t *testing.T) {
 	challenge := sha256.Sum256([]byte("123456" + "alice" + "dev1" + "serverPubKey"))
 	authB64, cdB64, sigB64 := signWebAuthnAssertion(t, priv, challenge[:])
 
-	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:]); err != nil {
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:], ""); err != nil {
 		t.Fatalf("VerifyWebAuthnAssertion valid: %v", err)
 	}
 }
@@ -604,7 +606,7 @@ func TestVerifyWebAuthnAssertion_WrongChallenge(t *testing.T) {
 	// Server expects a different challenge (e.g. attacker replaying an old
 	// assertion against a new OTP).
 	expected := sha256.Sum256([]byte("999999alicedev1server"))
-	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, expected[:]); err == nil {
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, expected[:], ""); err == nil {
 		t.Fatal("expected challenge mismatch error, got nil")
 	}
 }
@@ -618,7 +620,7 @@ func TestVerifyWebAuthnAssertion_WrongKey(t *testing.T) {
 	challenge := sha256.Sum256([]byte("123456alicedev1server"))
 	authB64, cdB64, sigB64 := signWebAuthnAssertion(t, privSigner, challenge[:])
 
-	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:]); err == nil {
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:], ""); err == nil {
 		t.Fatal("expected signature verification failure, got nil")
 	}
 }
@@ -636,7 +638,7 @@ func TestVerifyWebAuthnAssertion_TamperedClientData(t *testing.T) {
 		base64.RawURLEncoding.EncodeToString(challenge[:]))
 	cdB64 := base64.StdEncoding.EncodeToString([]byte(tampered))
 
-	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:]); err == nil {
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:], ""); err == nil {
 		t.Fatal("expected verification failure on tampered clientDataJSON, got nil")
 	}
 }
@@ -668,5 +670,61 @@ func TestWebAuthnCredentialStore_RoundTrip(t *testing.T) {
 	credId, cose, err = s.GetWebAuthnCredential("bob", "devX")
 	if err != nil || credId != "" || cose != "" {
 		t.Fatalf("unknown user: got (%s, %s, %v), want empty", credId, cose, err)
+	}
+}
+
+func TestVerifyWebAuthnAssertion_RpIdHash(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cose := base64.StdEncoding.EncodeToString(buildCOSEP256Key(&priv.PublicKey))
+
+	challenge := sha256.Sum256([]byte("123456alicedev1server"))
+	authB64, cdB64, sigB64 := signWebAuthnAssertion(t, priv, challenge[:])
+
+	// Correct RP ID passes.
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:], "reg.opennhp.org"); err != nil {
+		t.Fatalf("correct rpId: %v", err)
+	}
+	// Wrong RP ID is rejected.
+	if err := VerifyWebAuthnAssertion(cose, authB64, cdB64, sigB64, challenge[:], "evil.example"); err == nil {
+		t.Fatal("expected rpIdHash mismatch, got nil")
+	}
+}
+
+func TestVerifyWebAuthnAssertion_UserPresentRequired(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cose := base64.StdEncoding.EncodeToString(buildCOSEP256Key(&priv.PublicKey))
+	challenge := sha256.Sum256([]byte("123456alicedev1server"))
+
+	// Build an assertion whose UP flag is cleared but is otherwise valid.
+	clientData := fmt.Sprintf(`{"type":"webauthn.get","challenge":"%s","origin":"https://reg.opennhp.org"}`,
+		base64.RawURLEncoding.EncodeToString(challenge[:]))
+	authData := make([]byte, 37)
+	rpIdHash := sha256.Sum256([]byte("reg.opennhp.org"))
+	copy(authData[:32], rpIdHash[:])
+	// authData[32] deliberately left 0x00 — no user presence.
+	cdHash := sha256.Sum256([]byte(clientData))
+	signed := append(append([]byte{}, authData...), cdHash[:]...)
+	digest := sha256.Sum256(signed)
+	sig, _ := ecdsa.SignASN1(rand.Reader, priv, digest[:])
+
+	err := VerifyWebAuthnAssertion(cose,
+		base64.StdEncoding.EncodeToString(authData),
+		base64.StdEncoding.EncodeToString([]byte(clientData)),
+		base64.StdEncoding.EncodeToString(sig),
+		challenge[:], "reg.opennhp.org")
+	if err == nil {
+		t.Fatal("expected user-present flag error, got nil")
+	}
+}
+
+func TestVerifyWebAuthnAssertion_ShortAuthData(t *testing.T) {
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cose := base64.StdEncoding.EncodeToString(buildCOSEP256Key(&priv.PublicKey))
+	challenge := sha256.Sum256([]byte("123456alicedev1server"))
+	_, cdB64, sigB64 := signWebAuthnAssertion(t, priv, challenge[:])
+
+	short := base64.StdEncoding.EncodeToString(make([]byte, 10))
+	if err := VerifyWebAuthnAssertion(cose, short, cdB64, sigB64, challenge[:], ""); err == nil {
+		t.Fatal("expected short authData error, got nil")
 	}
 }

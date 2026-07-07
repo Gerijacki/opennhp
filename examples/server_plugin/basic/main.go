@@ -439,10 +439,29 @@ func RegisterAgent(req *common.NhpRegisterRequest, helper *plugins.NhpServerPlug
 		return ack, err
 	}
 
-	// Step 1b: if the agent committed a WebAuthn credential at OTP time,
-	// verify the hardware-key assertion (proof of possession). The server
-	// reconstructs the challenge from the OTP + identity + server key and
-	// checks the ES256 signature against the committed credential.
+	// Step 1b: WebAuthn proof of possession — FAIL CLOSED. If a WebAuthn
+	// credential was committed at OTP time, a valid assertion is REQUIRED;
+	// omitting it must not downgrade the registration to OTP-only, or an
+	// attacker with a stolen OTP could bypass the hardware-key protection.
+	if helper.HasWebAuthnFunc != nil {
+		committed, err := helper.HasWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId)
+		if err != nil {
+			log.Error("RegisterAgent: webauthn credential lookup failed for user=%s: %v", req.Msg.UserId, err)
+			ack.ErrCode = common.ErrAgentKeyStoreError.ErrorCode()
+			ack.ErrMsg = common.ErrAgentKeyStoreError.Error()
+			return ack, err
+		}
+		if committed && req.Msg.WebAuthnAssertion == nil {
+			err := common.ErrWebAuthnAssertionRequired
+			log.Error("RegisterAgent: webauthn credential committed but no assertion supplied for user=%s (possible downgrade attempt)", req.Msg.UserId)
+			ack.ErrCode = common.ErrWebAuthnAssertionRequired.ErrorCode()
+			ack.ErrMsg = err.Error()
+			return ack, err
+		}
+	}
+	// Verify the assertion when supplied. The server reconstructs the
+	// challenge from the OTP + identity + server key and checks the ES256
+	// signature against the committed credential.
 	if req.Msg.WebAuthnAssertion != nil {
 		if helper.VerifyWebAuthnFunc == nil {
 			err := fmt.Errorf("RegisterAgent: webauthn assertion supplied but helper not available")

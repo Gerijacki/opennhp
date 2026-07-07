@@ -207,6 +207,13 @@ type PluginStoreWebAuthnFunc func(userId, deviceId, credentialId, publicKeyCOSE 
 // signature against the credential committed at OTP time.
 type PluginVerifyWebAuthnFunc func(userId, deviceId, otp, authDataB64, clientDataJSONB64, sigB64 string) error
 
+// PluginHasWebAuthnFunc reports whether a WebAuthn credential was committed
+// for (userId, deviceId) at OTP time. Plugins MUST fail registration closed
+// when this returns true and the NHP-REG message carries no assertion —
+// otherwise an attacker with a stolen OTP could downgrade to OTP-only
+// registration and bypass the hardware-key proof of possession.
+type PluginHasWebAuthnFunc func(userId, deviceId string) (bool, error)
+
 type NhpServerPluginHelper struct {
 	StopSignal              <-chan struct{}
 	AuthWithNhpCallbackFunc NhpPluginPostAuthFunc
@@ -219,6 +226,7 @@ type NhpServerPluginHelper struct {
 	// WebAuthn helpers — optional hardware-key proof of possession.
 	StoreWebAuthnFunc  PluginStoreWebAuthnFunc
 	VerifyWebAuthnFunc PluginVerifyWebAuthnFunc
+	HasWebAuthnFunc    PluginHasWebAuthnFunc
 	// OTPTTLSeconds is the server-configured OTP lifetime in seconds.
 	// Plugins should read this instead of hardcoding a TTL.
 	OTPTTLSeconds int64

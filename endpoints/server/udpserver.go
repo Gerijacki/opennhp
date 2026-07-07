@@ -1404,6 +1404,13 @@ func (us *UdpServer) NewNhpServerHelper(ppd *core.PacketParserData) *plugins.Nhp
 			return us.keyStore.RegisterAgentKey(userId, deviceId, pubKeyBase64, keyTTL)
 		}
 		h.StoreWebAuthnFunc = us.keyStore.StoreWebAuthnCredential
+		h.HasWebAuthnFunc = func(userId, deviceId string) (bool, error) {
+			credId, _, err := us.keyStore.GetWebAuthnCredential(userId, deviceId)
+			if err != nil {
+				return false, err
+			}
+			return credId != "", nil
+		}
 		h.VerifyWebAuthnFunc = func(userId, deviceId, otp, authDataB64, clientDataJSONB64, sigB64 string) error {
 			_, publicKeyCOSE, err := us.keyStore.GetWebAuthnCredential(userId, deviceId)
 			if err != nil {
@@ -1418,7 +1425,7 @@ func (us *UdpServer) NewNhpServerHelper(ppd *core.PacketParserData) *plugins.Nhp
 			// agent selected. Accept either scheme's key.
 			for _, serverPubKey := range []string{us.device.PublicKeyBase64(), us.device.PublicKeyExBase64()} {
 				expected := sha256.Sum256([]byte(otp + userId + deviceId + serverPubKey))
-				if err = VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB64, expected[:]); err == nil {
+				if err = VerifyWebAuthnAssertion(publicKeyCOSE, authDataB64, clientDataJSONB64, sigB64, expected[:], us.config.WebAuthnRpId); err == nil {
 					return nil
 				}
 			}

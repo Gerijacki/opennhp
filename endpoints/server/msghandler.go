@@ -241,10 +241,23 @@ func (s *UdpServer) HandleRegisterRequest(ppd *core.PacketParserData) (err error
 				Port: ppd.ConnData.RemoteAddr.Port,
 			},
 		}
-		// The Noise handshake already carries the agent's static public key;
-		// use it as an authoritative fallback when the message body omits pubKey.
-		if regReq.PublicKey == "" && ppd.RemotePubKey != nil {
-			regReq.PublicKey = base64.StdEncoding.EncodeToString(ppd.RemotePubKey)
+		// The Noise handshake already carries the agent's static public key
+		// — a key the sender has proven possession of. Bind the registered
+		// key to it: if the message body names a key, it must match the
+		// handshake key; if the body omits it, register the handshake key.
+		// This prevents registering a public key whose private key the
+		// sender does not hold.
+		if ppd.RemotePubKey != nil {
+			handshakeKey := base64.StdEncoding.EncodeToString(ppd.RemotePubKey)
+			if regReq.PublicKey == "" {
+				regReq.PublicKey = handshakeKey
+			} else if regReq.PublicKey != handshakeKey {
+				err = common.ErrRegisterKeyHandshakeMismatch
+				log.Error("server-agent(%s#%d@%s)[HandleRegisterRequest] body public key does not match handshake key", regMsg.UserId, transactionId, addrStr)
+				rakMsg.ErrCode = common.ErrRegisterKeyHandshakeMismatch.ErrorCode()
+				rakMsg.ErrMsg = err.Error()
+				return
+			}
 		}
 
 		rakMsg, err = handler.RegisterAgent(regReq, s.NewNhpServerHelper(ppd))

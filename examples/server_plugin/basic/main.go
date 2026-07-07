@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/smtp"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -22,6 +24,18 @@ import (
 type config struct {
 	ExampleUsername string
 	ExamplePassword string
+	// SMTP settings for OTP email delivery.
+	SMTPHost     string `toml:"smtp_host"`
+	SMTPPort     string `toml:"smtp_port"`
+	SMTPUsername string `toml:"smtp_username"`
+	SMTPPassword string `toml:"smtp_password"`
+	SMTPFrom     string `toml:"smtp_from"`
+	SMTPSubject  string `toml:"smtp_subject"`
+	// RequireEmailMatch, when true, enforces that the email address
+	// supplied in UserData matches the claimed userId. This is the
+	// minimum identity-binding check for a demo deployment.
+	// Defaults to true when not explicitly set in config.
+	RequireEmailMatch *bool `toml:"require_email_match"`
 }
 
 var (
@@ -317,6 +331,252 @@ func AuthWithNHP(req *common.NhpAuthRequest, helper *plugins.NhpServerPluginHelp
 	return ackMsg, err
 }
 
+// ── Plugin metadata exports ──────────────────────────────────────────────
+
+func Signature() string {
+	return name + "/" + version
+}
+
+func ExportedData() *plugins.PluginParamsOut {
+	return &plugins.PluginParamsOut{}
+}
+
+// ── OTP and registration ─────────────────────────────────────────────────
+
+// RequestOTP generates a one-time password, sends it via email, and stores
+// it via the server's key store.
+//
+// SECURITY: The recipient email address is taken from req.Msg.UserData["email"],
+// which is caller-supplied. In production, the ASP MUST verify that the
+// claimed userId is bound to that email address (e.g., pre-verified identity
+// from an SSO assertion, a confirmed email in a user directory, or an OIDC
+// id_token claim). Without this check, an attacker who controls an inbox can
+// register a public key under any userId.
+//
+// This example plugin demonstrates the minimum check via the
+// RequireEmailMatch config option (default true), which validates that
+// the email matches userId. For a real deployment, replace this with
+// your identity provider's verification.
+func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper) error {
+	if helper == nil || helper.GenerateOTPFunc == nil {
+		return fmt.Errorf("RequestOTP: keystore helper not available")
+	}
+
+	// Extract email from UserData.
+	to := req.Msg.UserData["email"]
+	emailAddr, ok := to.(string)
+	if !ok || emailAddr == "" {
+		emailAddr = req.Msg.UserId // fallback: use userId as email
+		log.Warning("RequestOTP: no email in UserData, using userId as email recipient")
+	}
+
+	// Identity-binding check: when enabled (default), reject requests
+	// where the email does not equal the claimed userId. This check runs
+	// BEFORE OTP generation so rejected requests have no side effects
+	// (no OTP state rotation, no email send).
+	requireMatch := true // default
+	if baseConf != nil && baseConf.RequireEmailMatch != nil {
+		requireMatch = *baseConf.RequireEmailMatch
+	}
+	if requireMatch && emailAddr != req.Msg.UserId {
+		return fmt.Errorf("RequestOTP: email %s does not match userId %s", emailAddr, req.Msg.UserId)
+	}
+
+	// Use server-configured OTP TTL (default 300s = 5 min).
+	ttl := helper.OTPTTLSeconds
+	if ttl <= 0 {
+		ttl = 300
+	}
+	// Bind the agent's public key (from the NHP-OTP message) to the OTP at
+	// issuance. ValidateOTP later rejects a NHP-REG that presents this OTP
+	// with a different key (stolen-OTP defense).
+	otpCode, err := helper.GenerateOTPFunc(req.Msg.UserId, req.Msg.DeviceId, req.PublicKey, ttl)
+	if err != nil {
+		log.Error("RequestOTP: generate otp failed: %v", err)
+		return err
+	}
+
+	// If the agent supplied a WebAuthn credential (hardware-backed key),
+	// commit it alongside the OTP so RegisterAgent can verify the
+	// assertion at NHP-REG time.
+	if req.Msg.WebAuthnCredential != nil && helper.StoreWebAuthnFunc != nil {
+		wc := req.Msg.WebAuthnCredential
+		if err := helper.StoreWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId, wc.CredentialId, wc.PublicKeyCOSE); err != nil {
+			log.Error("RequestOTP: store webauthn credential failed: %v", err)
+			return err
+		}
+	}
+
+	// Send OTP via email.
+	if err := sendOTPEmail(emailAddr, otpCode); err != nil {
+		log.Error("RequestOTP: send email failed: %v", err)
+		return err
+	}
+
+	log.Info("RequestOTP: otp[%s] sent to %s for user=%s device=%s", otpCode, emailAddr, req.Msg.UserId, req.Msg.DeviceId)
+	return nil
+}
+
+// RegisterAgent validates the OTP and registers the agent's public key.
+func RegisterAgent(req *common.NhpRegisterRequest, helper *plugins.NhpServerPluginHelper) (*common.ServerRegisterAckMsg, error) {
+	ack := req.Ack
+	if ack == nil {
+		ack = &common.ServerRegisterAckMsg{}
+	}
+
+	if helper == nil || helper.ValidateOTPFunc == nil || helper.RegisterKeyFunc == nil {
+		err := fmt.Errorf("RegisterAgent: keystore helper not available")
+		ack.ErrCode = common.ErrAgentKeyStoreError.ErrorCode()
+		ack.ErrMsg = err.Error()
+		return ack, err
+	}
+
+	// Step 1: validate OTP.
+	if err := helper.ValidateOTPFunc(req.Msg.UserId, req.Msg.DeviceId, req.Msg.OTP, req.PublicKey); err != nil {
+		log.Error("RegisterAgent: otp validation failed for user=%s: %v", req.Msg.UserId, err)
+		ack.ErrCode = common.ErrorToErrorCode(err)
+		ack.ErrMsg = common.ErrorToString(err)
+		return ack, err
+	}
+
+	// Step 1b: WebAuthn proof of possession — FAIL CLOSED. If a WebAuthn
+	// credential was committed at OTP time, a valid assertion is REQUIRED;
+	// omitting it must not downgrade the registration to OTP-only, or an
+	// attacker with a stolen OTP could bypass the hardware-key protection.
+	if helper.HasWebAuthnFunc != nil {
+		committed, err := helper.HasWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId)
+		if err != nil {
+			log.Error("RegisterAgent: webauthn credential lookup failed for user=%s: %v", req.Msg.UserId, err)
+			ack.ErrCode = common.ErrAgentKeyStoreError.ErrorCode()
+			ack.ErrMsg = common.ErrAgentKeyStoreError.Error()
+			return ack, err
+		}
+		if committed && req.Msg.WebAuthnAssertion == nil {
+			err := common.ErrWebAuthnAssertionRequired
+			log.Error("RegisterAgent: webauthn credential committed but no assertion supplied for user=%s (possible downgrade attempt)", req.Msg.UserId)
+			ack.ErrCode = common.ErrWebAuthnAssertionRequired.ErrorCode()
+			ack.ErrMsg = err.Error()
+			return ack, err
+		}
+	}
+	// Verify the assertion when supplied. The server reconstructs the
+	// challenge from the OTP + identity + server key and checks the ES256
+	// signature against the committed credential.
+	if req.Msg.WebAuthnAssertion != nil {
+		if helper.VerifyWebAuthnFunc == nil {
+			err := fmt.Errorf("RegisterAgent: webauthn assertion supplied but helper not available")
+			ack.ErrCode = common.ErrAgentKeyStoreError.ErrorCode()
+			ack.ErrMsg = err.Error()
+			return ack, err
+		}
+		wa := req.Msg.WebAuthnAssertion
+		if err := helper.VerifyWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId, req.Msg.OTP,
+			wa.AuthenticatorData, wa.ClientDataJSON, wa.Signature); err != nil {
+			log.Error("RegisterAgent: webauthn verification failed for user=%s: %v", req.Msg.UserId, err)
+			ack.ErrCode = common.ErrorToErrorCode(err)
+			ack.ErrMsg = common.ErrorToString(err)
+			return ack, err
+		}
+	}
+
+	// Step 2: register the agent's public key.
+	if err := helper.RegisterKeyFunc(req.Msg.UserId, req.Msg.DeviceId, req.PublicKey); err != nil {
+		log.Error("RegisterAgent: register key failed for user=%s: %v", req.Msg.UserId, err)
+		ack.ErrCode = common.ErrorToErrorCode(err)
+		ack.ErrMsg = common.ErrorToString(err)
+		return ack, err
+	}
+
+	// Step 3: echo the stored expiry back to the agent so the SDK can
+	// show "valid until <date>" instead of computing it client-side.
+	// GetAgentKeyExpiry is nil-safe: if the helper did not wire it
+	// (older server), we simply omit ExpiresAt from the ack.
+	if helper.GetAgentKeyExpiryFunc != nil {
+		if _, exp, err := helper.GetAgentKeyExpiryFunc(req.Msg.UserId, req.Msg.DeviceId); err == nil {
+			ack.ExpiresAt = exp
+		} else {
+			log.Warning("RegisterAgent: read expiry failed for user=%s: %v", req.Msg.UserId, err)
+		}
+	}
+
+	ack.ErrCode = common.ErrSuccess.ErrorCode()
+	ack.AuthServiceId = req.Msg.AuthServiceId
+	if ack.ExpiresAt != nil {
+		log.Info("RegisterAgent: registered user=%s device=%s expiresAt=%d", req.Msg.UserId, req.Msg.DeviceId, *ack.ExpiresAt)
+	} else {
+		log.Info("RegisterAgent: registered user=%s device=%s (no expiry)", req.Msg.UserId, req.Msg.DeviceId)
+	}
+	return ack, nil
+}
+
+// ListService returns the list of available services for the agent.
+func ListService(req *common.NhpListRequest, helper *plugins.NhpServerPluginHelper) (*common.ServerListResultMsg, error) {
+	ack := req.Ack
+	if ack == nil {
+		ack = &common.ServerListResultMsg{}
+	}
+
+	resourceMapMutex.Lock()
+	defer resourceMapMutex.Unlock()
+
+	if ack.ListResults == nil {
+		ack.ListResults = make(map[string]any)
+	}
+	for resId := range resourceMap {
+		ack.ListResults[resId] = nil
+	}
+
+	ack.ErrCode = common.ErrSuccess.ErrorCode()
+	return ack, nil
+}
+
+// ── Email helper ─────────────────────────────────────────────────────────
+
+func sendOTPEmail(to, code string) error {
+	smtpHost := ""
+	if baseConf != nil {
+		smtpHost = baseConf.SMTPHost
+	}
+	// Treat unsubstituted envsubst placeholders as unconfigured.
+	if smtpHost == "" || strings.HasPrefix(smtpHost, "${") {
+		// SMTP not configured — succeed silently so local dev can complete
+		// registration without an email server. The OTP code is printed at
+		// Info level so it is visible in default log configurations.
+		log.Info("OTP CODE for %s: %s (SMTP not configured, printed for local dev)", to, code)
+		return nil
+	}
+
+	subject := baseConf.SMTPSubject
+	if subject == "" {
+		subject = "Your OpenNHP Verification Code"
+	}
+
+	body := fmt.Sprintf("Subject: %s\r\n", subject)
+	body += "MIME-Version: 1.0\r\n"
+	body += "Content-Type: text/plain; charset=\"UTF-8\"\r\n"
+	body += "\r\n"
+	body += fmt.Sprintf("Your verification code is: %s\r\n", code)
+	body += fmt.Sprintf("This code will expire in 5 minutes.\r\n")
+
+	port, err := strconv.Atoi(baseConf.SMTPPort)
+	if err != nil || port <= 0 {
+		port = 587
+	}
+	addr := fmt.Sprintf("%s:%d", baseConf.SMTPHost, port)
+
+	var auth smtp.Auth
+	if baseConf.SMTPUsername != "" {
+		auth = smtp.PlainAuth("", baseConf.SMTPUsername, baseConf.SMTPPassword, baseConf.SMTPHost)
+	}
+
+	from := baseConf.SMTPFrom
+	if from == "" {
+		from = "noreply@opennhp.org"
+	}
+
+	return smtp.SendMail(addr, auth, from, []string{to}, []byte(body))
+}
+
 func corsMiddleware(ctx *gin.Context) {
 	originResource := ctx.Request.Header.Get("Origin")
 
@@ -331,4 +591,3 @@ func corsMiddleware(ctx *gin.Context) {
 func main() {
 
 }
-

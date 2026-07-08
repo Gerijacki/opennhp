@@ -168,14 +168,6 @@ type Config struct {
 	// validation will reject the key and knocks will fail as if the
 	// agent were never registered. Default 86400 (24h) if unset / zero.
 	AgentKeyTTLSeconds int `json:"agentKeyTTLSeconds"`
-
-	// WebAuthnRpId is the WebAuthn Relying Party ID (the registration
-	// page's domain, e.g. "reg.opennhp.org"). When set, WebAuthn
-	// assertion verification additionally checks that the assertion's
-	// authenticatorData rpIdHash equals SHA256(WebAuthnRpId), binding
-	// assertions to the expected origin. Strongly recommended in
-	// production; when empty the rpIdHash check is skipped.
-	WebAuthnRpId string `json:"webauthnRpId"`
 }
 
 type RemoteConfig struct {

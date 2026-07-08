@@ -396,17 +396,6 @@ func RequestOTP(req *common.NhpOTPRequest, helper *plugins.NhpServerPluginHelper
 		return err
 	}
 
-	// If the agent supplied a WebAuthn credential (hardware-backed key),
-	// commit it alongside the OTP so RegisterAgent can verify the
-	// assertion at NHP-REG time.
-	if req.Msg.WebAuthnCredential != nil && helper.StoreWebAuthnFunc != nil {
-		wc := req.Msg.WebAuthnCredential
-		if err := helper.StoreWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId, wc.CredentialId, wc.PublicKeyCOSE); err != nil {
-			log.Error("RequestOTP: store webauthn credential failed: %v", err)
-			return err
-		}
-	}
-
 	// Send OTP via email.
 	if err := sendOTPEmail(emailAddr, otpCode); err != nil {
 		log.Error("RequestOTP: send email failed: %v", err)
@@ -437,46 +426,6 @@ func RegisterAgent(req *common.NhpRegisterRequest, helper *plugins.NhpServerPlug
 		ack.ErrCode = common.ErrorToErrorCode(err)
 		ack.ErrMsg = common.ErrorToString(err)
 		return ack, err
-	}
-
-	// Step 1b: WebAuthn proof of possession — FAIL CLOSED. If a WebAuthn
-	// credential was committed at OTP time, a valid assertion is REQUIRED;
-	// omitting it must not downgrade the registration to OTP-only, or an
-	// attacker with a stolen OTP could bypass the hardware-key protection.
-	if helper.HasWebAuthnFunc != nil {
-		committed, err := helper.HasWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId)
-		if err != nil {
-			log.Error("RegisterAgent: webauthn credential lookup failed for user=%s: %v", req.Msg.UserId, err)
-			ack.ErrCode = common.ErrAgentKeyStoreError.ErrorCode()
-			ack.ErrMsg = common.ErrAgentKeyStoreError.Error()
-			return ack, err
-		}
-		if committed && req.Msg.WebAuthnAssertion == nil {
-			err := common.ErrWebAuthnAssertionRequired
-			log.Error("RegisterAgent: webauthn credential committed but no assertion supplied for user=%s (possible downgrade attempt)", req.Msg.UserId)
-			ack.ErrCode = common.ErrWebAuthnAssertionRequired.ErrorCode()
-			ack.ErrMsg = err.Error()
-			return ack, err
-		}
-	}
-	// Verify the assertion when supplied. The server reconstructs the
-	// challenge from the OTP + identity + server key and checks the ES256
-	// signature against the committed credential.
-	if req.Msg.WebAuthnAssertion != nil {
-		if helper.VerifyWebAuthnFunc == nil {
-			err := fmt.Errorf("RegisterAgent: webauthn assertion supplied but helper not available")
-			ack.ErrCode = common.ErrAgentKeyStoreError.ErrorCode()
-			ack.ErrMsg = err.Error()
-			return ack, err
-		}
-		wa := req.Msg.WebAuthnAssertion
-		if err := helper.VerifyWebAuthnFunc(req.Msg.UserId, req.Msg.DeviceId, req.Msg.OTP,
-			wa.AuthenticatorData, wa.ClientDataJSON, wa.Signature); err != nil {
-			log.Error("RegisterAgent: webauthn verification failed for user=%s: %v", req.Msg.UserId, err)
-			ack.ErrCode = common.ErrorToErrorCode(err)
-			ack.ErrMsg = common.ErrorToString(err)
-			return ack, err
-		}
 	}
 
 	// Step 2: register the agent's public key.

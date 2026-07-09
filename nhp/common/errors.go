@@ -148,7 +148,6 @@ var (
 	ErrOTPCooldown                  = newError("56009", "otp request too frequent, please wait before requesting a new code", "验证码请求过于频繁，请稍后再试")
 	ErrOTPPublicKeyMismatch         = newError("56010", "otp was issued for a different public key", "一次性验证码绑定的公钥与注册公钥不匹配")
 	ErrRegisterKeyHandshakeMismatch = newError("56011", "public key to register does not match the handshake key", "注册公钥与握手公钥不匹配")
-	ErrWebAuthnAssertionRequired    = newError("56012", "webauthn assertion required for this registration", "该注册请求必须携带WebAuthn断言")
 
 	// db
 	ErrTEENotAuthorized        = newError("55001", "TEE is  not authorized", "可信执行环境未授权")

@@ -129,15 +129,6 @@
       <label for="org-id">Organization ID <span style="font-weight:400;color:#484f58">(optional)</span></label>
       <input type="text" id="org-id" placeholder="opennhp.org">
     </div>
-    <!-- WebAuthn toggle — shown only when browser supports it -->
-    <div id="webauthn-field" class="field" style="display:none;margin-top:14px">
-      <hr style="margin-bottom:14px">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-        <input type="checkbox" id="webauthn-toggle" checked style="width:auto">
-        <span>Use hardware key (WebAuthn / FIDO2) <span style="color:#3fb950;font-size:11px">Recommended</span></span>
-      </label>
-      <div class="hint">Generates your key in the device's secure hardware (TPM/Secure Enclave). The private key never leaves your device.</div>
-    </div>
     <button class="btn btn-primary" id="btn-next" onclick="goToOtpStep()" style="margin-top:14px">Send Verification Code (NHP-OTP)</button>
   </div>
 
@@ -154,9 +145,6 @@
     <div class="field">
       <label for="otp-input">Verification Code</label>
       <input type="text" id="otp-input" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
-    </div>
-    <div id="webauthn-hint" style="display:none;font-size:12px;color:#3fb950;margin-bottom:10px;padding:8px 10px;background:#0d2b1e;border-radius:4px;border:1px solid #1f3a2f">
-      Your browser will ask you to confirm with biometrics or PIN after you click Register.
     </div>
     <div class="btn-row">
       <button class="btn btn-secondary" onclick="goToIdentityStep()">Back</button>
@@ -252,153 +240,25 @@ function populateServers() {
   sel.dispatchEvent(new Event('change'));
 }
 
-// ── WebAuthn helpers ──
-
-// useWebAuthn is true when the browser supports WebAuthn AND the user has
-// the toggle enabled.
-let useWebAuthn = false;
-// webAuthnCredential stores the credential created during goToOtpStep so
-// doRegister can use it for the assertion.
-let webAuthnCredential = null;
-
-function b64url(buf) {
-  const bytes = new Uint8Array(buf);
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-}
-
-function b64std(buf) {
-  const bytes = new Uint8Array(buf);
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
-}
-
-// createWebAuthnCredential creates a new P-256 credential in hardware and
-// returns { credentialId, publicKeyCOSE } for committing in NHP-OTP.
-async function createWebAuthnCredential(userId, deviceId) {
-  const challenge = crypto.getRandomValues(new Uint8Array(32));
-  const userIdBytes = new TextEncoder().encode(userId + ':' + deviceId);
-
-  const credential = await navigator.credentials.create({
-    publicKey: {
-      rp: { name: 'OpenNHP', id: window.location.hostname },
-      user: { id: userIdBytes, name: userId, displayName: userId },
-      challenge,
-      pubKeyCredParams: [{ type: 'public-key', alg: -7 }], // ES256 / P-256
-      authenticatorSelection: {
-        userVerification: 'preferred',
-        residentKey: 'preferred',
-      },
-      timeout: 60000,
-      attestation: 'none',
-    },
-  });
-
-  const response = credential.response;
-  // Extract COSE public key from authenticatorData (starts at byte 55 in
-  // the attested credential data; we use getPublicKey() when available).
-  let pubKeyCOSE;
-  if (typeof response.getPublicKey === 'function') {
-    pubKeyCOSE = b64std(response.getPublicKey());
-  } else {
-    // Fallback: parse COSE from authenticatorData manually.
-    // authenticatorData layout: rpIdHash(32) + flags(1) + signCount(4) +
-    // aaguid(16) + credIdLen(2) + credId(credIdLen) + COSE_Key(rest)
-    const authData = new Uint8Array(response.attestationObject
-      ? extractAuthDataFromAttestationObject(response.attestationObject)
-      : response.authenticatorData);
-    const credIdLen = (authData[53] << 8) | authData[54];
-    const coseStart = 55 + credIdLen;
-    pubKeyCOSE = b64std(authData.slice(coseStart));
-  }
-
-  return {
-    credentialId: b64url(credential.rawId),
-    publicKeyCOSE: pubKeyCOSE,
-    rawCredential: credential,
-  };
-}
-
-// getWebAuthnAssertion triggers navigator.credentials.get() with a
-// challenge derived from the OTP + identity + server public key.
-// challenge = SHA256(otp || userId || deviceId || serverPubKey)
-async function getWebAuthnAssertion(credentialId, otp, userId, deviceId, serverPubKey) {
-  const enc = new TextEncoder();
-  const material = enc.encode(otp + userId + deviceId + serverPubKey);
-  const challengeHash = await crypto.subtle.digest('SHA-256', material);
-
-  const rawId = Uint8Array.from(atob(credentialId.replace(/-/g,'+').replace(/_/g,'/')), c => c.charCodeAt(0));
-
-  const assertion = await navigator.credentials.get({
-    publicKey: {
-      challenge: challengeHash,
-      allowCredentials: [{ type: 'public-key', id: rawId }],
-      userVerification: 'preferred',
-      timeout: 60000,
-    },
-  });
-
-  const r = assertion.response;
-  return {
-    credId: credentialId,
-    authData: b64std(r.authenticatorData),
-    clientDataJSON: b64std(r.clientDataJSON),
-    sig: b64std(r.signature),
-  };
-}
-
 // ── Registration flow ──
 window.goToOtpStep = async () => {
-  // Email is the primary identity — User ID defaults to it.
   const email = $('#email').value.trim();
   if (!email) { showAlert('Please enter your email (used as both user ID and OTP address)', 'error'); return; }
   if (!selectedServer) { showAlert('Please select a target server', 'error'); return; }
 
-  useWebAuthn = window.PublicKeyCredential && $('#webauthn-toggle')?.checked;
-
   showStep('otp');
   $('#otp-email-display').textContent = email;
   $('#spinner-otp').classList.add('visible');
-
-  if (useWebAuthn) {
-    $('#webauthn-hint').style.display = 'block';
-    $('#otp-status-text').textContent = 'Creating hardware key...';
-  } else {
-    $('#otp-status-text').textContent = 'Initializing agent...';
-  }
+  $('#otp-status-text').textContent = 'Initializing agent...';
 
   try {
     await initAgent();
-    const deviceId = $('#device-id').value.trim();
-    let webauthnField = undefined;
+    $('#otp-status-text').textContent = 'Sending verification code...';
 
-    if (useWebAuthn) {
-      try {
-        webAuthnCredential = await createWebAuthnCredential(email, deviceId);
-        webauthnField = {
-          credId: webAuthnCredential.credentialId,
-          pubKeyCOSE: webAuthnCredential.publicKeyCOSE,
-        };
-        $('#otp-status-text').textContent = 'Hardware key created. Sending verification code...';
-      } catch (err) {
-        // WebAuthn failed (user cancelled, not supported, etc.) — fall back.
-        useWebAuthn = false;
-        webAuthnCredential = null;
-        $('#webauthn-hint').style.display = 'none';
-        $('#otp-status-text').textContent = 'Hardware key unavailable, using software key. Sending code...';
-      }
-    } else {
-      $('#otp-status-text').textContent = 'Sending verification code...';
-    }
-
-    const result = await agent.requestOtp($('#asp-id').value.trim() || 'example', { email }, webauthnField);
+    const result = await agent.requestOtp($('#asp-id').value.trim() || 'example', { email });
     $('#spinner-otp').classList.remove('visible');
     if (result.success) {
-      $('#otp-status-text').textContent = useWebAuthn
-        ? 'Code sent! Enter it below, then confirm with your hardware key.'
-        : 'Code sent! Check server logs (local dev) or email.';
+      $('#otp-status-text').textContent = 'Code sent! Check server logs (local dev) or email.';
     } else {
       showAlert(`Failed: ${result.error}`, 'error');
       $('#otp-status-text').textContent = 'Failed.';
@@ -413,32 +273,13 @@ window.doRegister = async () => {
   const otp = $('#otp-input').value.trim();
   if (!otp || otp.length !== 6) { showAlert('Enter a 6-digit code', 'error'); return; }
   $('#btn-register').disabled = true;
-  $('#btn-register').textContent = useWebAuthn ? 'Confirm with hardware key...' : 'Registering...';
+  $('#btn-register').textContent = 'Registering...';
 
   try {
-    let webauthnAssertion = undefined;
-    if (useWebAuthn && webAuthnCredential) {
-      try {
-        webauthnAssertion = await getWebAuthnAssertion(
-          webAuthnCredential.credentialId,
-          otp,
-          $('#email').value.trim(),
-          $('#device-id').value.trim(),
-          selectedServer.publicKeyBase64,
-        );
-      } catch (err) {
-        showAlert('Hardware key confirmation failed: ' + (err.message || 'cancelled'), 'error');
-        $('#btn-register').disabled = false;
-        $('#btn-register').textContent = 'Register';
-        return;
-      }
-    }
-
     const result = await agent.registerPublicKey(
-      $('#asp-id').value.trim() || 'example', otp, { email: $('#email').value.trim() }, webauthnAssertion
+      $('#asp-id').value.trim() || 'example', otp, { email: $('#email').value.trim() }
     );
     if (result.success) {
-      // Save to localStorage so relay-test.html can import it.
       const regData = {
         userId: $('#email').value.trim(),
         deviceId: $('#device-id').value.trim(),
@@ -448,7 +289,7 @@ window.doRegister = async () => {
         serverPublicKey: selectedServer.publicKeyBase64,
         serverName: selectedServer.name || selectedServer.id,
         serverId: selectedServer.id,
-        expiresAt: result.expiresAt, // unix-ms from SDK; undefined if server has no TTL
+        expiresAt: result.expiresAt,
       };
       try { localStorage.setItem('nhp-reg-data', JSON.stringify(regData)); } catch (_) {}
 
@@ -459,11 +300,6 @@ window.doRegister = async () => {
           Server: ${escapeHtml(selectedServer.name || selectedServer.id)}<br>
           Keys saved — keep your private key safe.
         </div>
-        ${useWebAuthn ? `<div class="alert alert-info" style="font-size:12px">
-          Note: the hardware key (WebAuthn) protects the <em>registration proof</em> only.
-          The NHP session key shown below is a software Curve25519 key stored in
-          localStorage / downloadable file — protect it accordingly.
-        </div>` : ''}
         <div class="alert alert-info" style="background:#0d2b1e;border-color:#238636;color:#7ee787">
           ${result.expiresAt !== undefined
             ? `<strong>Key valid until ${new Date(result.expiresAt).toUTCString()}.</strong>
@@ -622,11 +458,6 @@ function generateDeviceId() {
 
 // ── Bootstrap ──
 (async () => {
-  // Show WebAuthn toggle only when the browser supports it.
-  if (window.PublicKeyCredential) {
-    $('#webauthn-field').style.display = 'block';
-  }
-
   try {
     const resp = await fetch('./config.json', { cache: 'no-store' });
     if (resp.ok) {

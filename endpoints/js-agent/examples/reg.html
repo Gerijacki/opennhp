@@ -13,9 +13,14 @@
     padding: 20px;
     min-height: 100vh;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 24px;
   }
+  .page-header { text-align: center; max-width: 940px; }
+  .page-header h1 { color: #58a6ff; font-size: 26px; margin-bottom: 6px; }
+  .page-header p { color: #8b949e; font-size: 14px; }
   .layout {
     display: flex;
     gap: 24px;
@@ -138,6 +143,11 @@
 </style>
 </head>
 <body>
+
+<header class="page-header">
+  <h1>NHP-Agent Key Registration Workflow Demo</h1>
+  <p>Register a device key over the NHP-OTP / NHP-REG protocol</p>
+</header>
 
 <div class="layout">
 <div class="card">

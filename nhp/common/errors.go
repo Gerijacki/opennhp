@@ -136,6 +136,19 @@ var (
 	ErrHttpReturnedWithError       = newError("54003", "http returns with error", "http返回带有错误")
 	ErrHttpResourceAddressNotFound = newError("54004", "http resource address not found", "http无法找到资源地址")
 
+	// registration
+	ErrOTPInvalid                   = newError("56001", "otp validation failed", "一次性验证码验证失败")
+	ErrOTPExpired                   = newError("56002", "otp has expired", "一次性验证码已过期")
+	ErrOTPAlreadyUsed               = newError("56003", "otp already used", "一次性验证码已被使用")
+	ErrPublicKeyAlreadyRegistered   = newError("56004", "public key already registered by another user", "公钥已被其他用户注册")
+	ErrAgentAlreadyRegistered       = newError("56005", "agent already registered", "设备已注册")
+	ErrAgentNotRegistered           = newError("56006", "agent not registered", "设备未注册")
+	ErrAgentKeyStoreError           = newError("56007", "agent key store operation failed", "密钥存储操作失败")
+	ErrOTPRateLimited               = newError("56008", "otp rate limited, too many attempts", "一次性验证码尝试次数过多，已锁定")
+	ErrOTPCooldown                  = newError("56009", "otp request too frequent, please wait before requesting a new code", "验证码请求过于频繁，请稍后再试")
+	ErrOTPPublicKeyMismatch         = newError("56010", "otp was issued for a different public key", "一次性验证码绑定的公钥与注册公钥不匹配")
+	ErrRegisterKeyHandshakeMismatch = newError("56011", "public key to register does not match the handshake key", "注册公钥与握手公钥不匹配")
+
 	// db
 	ErrTEENotAuthorized        = newError("55001", "TEE is  not authorized", "可信执行环境未授权")
 	ErrDataPrivateKeyStore     = newError("55002", "data private key store error", "数据私钥存储错误")

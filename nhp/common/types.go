@@ -45,8 +45,9 @@ type AuthSvcProviderMap map[string]*AuthServiceProviderData
 
 // requests
 type NhpOTPRequest struct {
-	Msg     *AgentOTPMsg `json:"msg"`
-	SrcAddr *NetAddress  `json:"srcAddr"`
+	Msg       *AgentOTPMsg `json:"msg"`
+	PublicKey string       `json:"pubKey"`
+	SrcAddr   *NetAddress  `json:"srcAddr"`
 }
 
 type NhpRegisterRequest struct {

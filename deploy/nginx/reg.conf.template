@@ -1,0 +1,34 @@
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${DOMAIN_REG};
+
+    # Cert SAN covers relay.*, agent.* and reg.*; share the single cert.
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN_RELAY}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN_RELAY}/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    root  /var/www/jsagent/reg;
+    index index.html;
+
+    # Registration page needs config.json for relay URL and server key.
+    # Serve the same config.json as the main jsagent vhost.
+    location = /config.json {
+        root /var/www/jsagent;
+        add_header Cache-Control "no-store" always;
+        try_files /config.json =404;
+    }
+
+    # The SDK bundle is shared with the main jsagent vhost. reg.html sits
+    # in the reg/ subdirectory but resolves nhp-js/dist/ relative to /, so
+    # we serve the bundle from the parent directory directly.
+    location /nhp-js/ {
+        root /var/www/jsagent;
+        try_files $uri =404;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}

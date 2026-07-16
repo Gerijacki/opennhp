@@ -429,7 +429,7 @@ func RegisterAgent(req *common.NhpRegisterRequest, helper *plugins.NhpServerPlug
 	}
 
 	// Step 2: register the agent's public key.
-	if err := helper.RegisterKeyFunc(req.Msg.UserId, req.Msg.DeviceId, req.PublicKey); err != nil {
+	if err := helper.RegisterKeyFunc(req.Msg.UserId, req.Msg.DeviceId, req.PublicKey, req.CipherScheme); err != nil {
 		log.Error("RegisterAgent: register key failed for user=%s: %v", req.Msg.UserId, err)
 		ack.ErrCode = common.ErrorToErrorCode(err)
 		ack.ErrMsg = common.ErrorToString(err)

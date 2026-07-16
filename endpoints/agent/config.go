@@ -146,7 +146,12 @@ func (a *UdpAgent) updateBaseConfig(file string) (err error) {
 
 	content, err := os.ReadFile(file)
 	if err != nil {
-		log.Error("failed to read base config: %v", err)
+		if os.IsNotExist(err) {
+			// config.toml not yet created (e.g. first-time registration); use empty config
+			err = nil
+		} else {
+			log.Error("failed to read base config: %v", err)
+		}
 	}
 
 	var conf Config

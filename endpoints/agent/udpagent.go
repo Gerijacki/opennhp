@@ -138,6 +138,19 @@ func (kt *KnockTarget) GetServerPeer() *core.UdpPeer {
 	return kt.ServerPeer
 }
 
+// GetServerPeerForScheme returns the server peer whose public key
+// matches the given cipher scheme. Falls back to ServerPeer when the
+// cluster has no separate Curve25519 peer configured.
+func (kt *KnockTarget) GetServerPeerForScheme(cipherScheme int) *core.UdpPeer {
+	kt.Lock()
+	defer kt.Unlock()
+
+	if kt.ServerCluster != nil {
+		return kt.ServerCluster.PeerForCipherScheme(cipherScheme)
+	}
+	return kt.ServerPeer
+}
+
 // SetServerCluster binds this target to a cluster. Idempotent; calling
 // it again with a different cluster (e.g. on resource-config reload
 // after the operator rehomed a resource to a new server identity)
@@ -158,6 +171,14 @@ func (kt *KnockTarget) SetServerCluster(sc *ServerCluster) {
 		kt.pendingCookie = nil
 	}
 	kt.ServerCluster = sc
+}
+
+// GetServerCluster returns the cluster this target is bound to.
+func (kt *KnockTarget) GetServerCluster() *ServerCluster {
+	kt.Lock()
+	defer kt.Unlock()
+
+	return kt.ServerCluster
 }
 
 // PickInstance returns the instance this target should send to next.
@@ -334,10 +355,17 @@ func (a *UdpAgent) Start(dirPath string, logLevel int) (err error) {
 		return err
 	}
 
-	prk, err := base64.StdEncoding.DecodeString(a.config.PrivateKeyBase64)
-	if err != nil {
-		log.Error("private key parse error %v\n", err)
-		return fmt.Errorf("private key parse error %v", err)
+	var prk []byte
+	if a.config.PrivateKeyBase64 == "" {
+		// No config.toml yet (e.g. first-time registration); use a throwaway key.
+		// ReinitWithKey will replace it with the real key immediately after Start returns.
+		prk = core.NewECDH(core.ECC_CURVE25519).PrivateKey()
+	} else {
+		prk, err = base64.StdEncoding.DecodeString(a.config.PrivateKeyBase64)
+		if err != nil {
+			log.Error("private key parse error %v\n", err)
+			return fmt.Errorf("private key parse error %v", err)
+		}
 	}
 
 	a.device = core.NewDevice(core.NHP_AGENT, prk, nil)
@@ -488,6 +516,94 @@ func (a *UdpAgent) Stop() {
 
 func (a *UdpAgent) IsRunning() bool {
 	return a.running.Load()
+}
+
+// PublicKeyBase64 returns the agent's curve25519 public key in base64 encoding.
+func (a *UdpAgent) PublicKeyBase64() string {
+	return a.device.PublicKeyBase64()
+}
+
+// PublicKeyBase64ByCipherScheme returns the public key matching the active
+// cipher scheme: SM2 for CIPHER_SCHEME_GMSM, curve25519 for CIPHER_SCHEME_CURVE.
+func (a *UdpAgent) PublicKeyBase64ByCipherScheme() string {
+	if a.config.DefaultCipherScheme == common.CIPHER_SCHEME_GMSM {
+		return a.device.PublicKeyExBase64()
+	}
+	return a.device.PublicKeyBase64()
+}
+
+// PrivateKeyBase64 returns the agent's private key in base64 encoding.
+func (a *UdpAgent) PrivateKeyBase64() string {
+	return a.config.PrivateKeyBase64
+}
+
+// ReinitWithKey stops the current device, creates a new one from the given
+// private key bytes, and re-adds all known server peers. Call this after
+// Start() when a fresh key pair has been generated for registration.
+func (a *UdpAgent) ReinitWithKey(privKeyBytes []byte, cipherScheme int) error {
+	a.device.Stop()
+	newDev := core.NewDevice(core.NHP_AGENT, privKeyBytes, nil)
+	if newDev == nil {
+		return fmt.Errorf("failed to create device from new key")
+	}
+	a.device = newDev
+	a.config.PrivateKeyBase64 = base64.StdEncoding.EncodeToString(privKeyBytes)
+	a.config.DefaultCipherScheme = cipherScheme
+	a.device.Start()
+
+	// Re-register all known server peers with the new device so outgoing
+	// packets are encrypted to their public keys.
+	a.serverPeerMutex.Lock()
+	defer a.serverPeerMutex.Unlock()
+	for _, sc := range a.serverClusterMap {
+		a.device.AddPeer(sc.RepresentativePeer())
+	}
+	return nil
+}
+
+// OrganizationId returns the organization ID from the loaded config.
+func (a *UdpAgent) OrganizationId() string {
+	a.knockUserMutex.RLock()
+	defer a.knockUserMutex.RUnlock()
+	if a.knockUser == nil {
+		return ""
+	}
+	return a.knockUser.OrganizationId
+}
+
+// FindKnockTarget looks up the KnockTarget for (aspId, resId) from the
+// loaded resource.toml entries. Returns nil if not found.
+func (a *UdpAgent) FindKnockTarget(aspId, resId string) *KnockTarget {
+	key := aspId + "/" + resId
+	a.knockTargetMapMutex.Lock()
+	defer a.knockTargetMapMutex.Unlock()
+	return a.knockTargetMap[key]
+}
+
+// FirstKnockTarget returns any one KnockTarget from the loaded resource.toml
+// entries, or nil if none are loaded. Used to suggest a default asp-id when
+// the user has not supplied one on the command line.
+func (a *UdpAgent) FirstKnockTarget() *KnockTarget {
+	a.knockTargetMapMutex.Lock()
+	defer a.knockTargetMapMutex.Unlock()
+	for _, kt := range a.knockTargetMap {
+		return kt
+	}
+	return nil
+}
+
+// FindKnockTargetByAspId returns the first KnockTarget whose AuthServiceId
+// matches aspId, regardless of ResourceId. Used during registration where
+// ResourceId is not required.
+func (a *UdpAgent) FindKnockTargetByAspId(aspId string) *KnockTarget {
+	a.knockTargetMapMutex.Lock()
+	defer a.knockTargetMapMutex.Unlock()
+	for _, kt := range a.knockTargetMap {
+		if kt.AuthServiceId == aspId {
+			return kt
+		}
+	}
+	return nil
 }
 
 func (a *UdpAgent) newConnection(addr *net.UDPAddr) (conn *UdpConn) {

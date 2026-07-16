@@ -186,7 +186,7 @@ type SessionClearFunc func(ctx *gin.Context)
 // (stolen-OTP defense). Pass "" when the agent did not supply a key.
 type PluginOTPGenerateFunc func(userId, deviceId, pubKey string, ttlSeconds int64) (otpCode string, err error)
 type PluginOTPValidateFunc func(userId, deviceId, otpCode, pubKey string) error
-type PluginRegisterKeyFunc func(userId, deviceId, pubKeyBase64 string) error
+type PluginRegisterKeyFunc func(userId, deviceId, pubKeyBase64 string, cipherScheme int) error
 type PluginIsRegisteredFunc func(userId, deviceId string) (bool, error)
 
 // PluginGetAgentKeyExpiryFunc returns whether the user+device has an

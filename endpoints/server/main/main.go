@@ -51,17 +51,42 @@ func main() {
 		Name:  "keygen",
 		Usage: "generate key pairs for NHP devices",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "curve", Value: false, DisableDefaultText: true, Usage: "generate curve25519 keys"},
-			&cli.BoolFlag{Name: "sm2", Value: false, DisableDefaultText: true, Usage: "generate sm2 keys (default)"},
+			&cli.BoolFlag{Name: "curve", Value: false, DisableDefaultText: true, Usage: "generate curve25519 keys only"},
+			&cli.BoolFlag{Name: "sm2", Value: false, DisableDefaultText: true, Usage: "generate sm2 keys only (default)"},
+			&cli.BoolFlag{Name: "both", Value: false, DisableDefaultText: true, Usage: "generate both SM2 and Curve25519 keys from one private key"},
 			&cli.BoolFlag{Name: "json", Value: false, DisableDefaultText: true, Usage: "output in JSON format"},
 		},
 		Action: func(c *cli.Context) error {
-			var e core.Ecdh
+			bothSchemes := c.Bool("both")
+			curveOnly := c.Bool("curve") && !bothSchemes
+
+			if bothSchemes {
+				// Generate one private key and derive both public keys from it.
+				e := core.NewECDH(core.ECC_SM2)
+				priv := e.PrivateKeyBase64()
+				sm2Pub := e.PublicKeyBase64()
+				privBytes := e.PrivateKey()
+				curvePub := core.ECDHFromKey(core.ECC_CURVE25519, privBytes).PublicKeyBase64()
+				if c.Bool("json") {
+					output := map[string]string{
+						"privateKey":          priv,
+						"sm2PublicKey":        sm2Pub,
+						"curve25519PublicKey": curvePub,
+					}
+					json.NewEncoder(os.Stdout).Encode(output)
+				} else {
+					fmt.Println("Private key:          ", priv)
+					fmt.Println("SM2 public key:       ", sm2Pub)
+					fmt.Println("Curve25519 public key:", curvePub)
+				}
+				return nil
+			}
+
 			eccType := core.ECC_SM2
-			if c.Bool("curve") {
+			if curveOnly {
 				eccType = core.ECC_CURVE25519
 			}
-			e = core.NewECDH(eccType)
+			e := core.NewECDH(eccType)
 			pub := e.PublicKeyBase64()
 			priv := e.PrivateKeyBase64()
 			if c.Bool("json") {

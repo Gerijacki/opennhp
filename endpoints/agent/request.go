@@ -18,13 +18,13 @@ func (a *UdpAgent) RequestOtp(target *KnockTarget) error {
 		DeviceId:       a.deviceId,
 		OrganizationId: a.knockUser.OrganizationId,
 		AuthServiceId:  target.AuthServiceId,
-		PublicKey:      a.device.PublicKeyBase64(),
+		PublicKey:      a.PublicKeyBase64ByCipherScheme(),
 		UserData:       a.knockUser.UserData,
 	}
 	a.knockUserMutex.RUnlock()
 	otpBytes, _ := json.Marshal(otpMsg)
 
-	serverPeer := target.GetServerPeer()
+	serverPeer := target.GetServerPeerForScheme(a.config.DefaultCipherScheme)
 	if serverPeer == nil {
 		log.Critical("agent(%s)[RequestOtp] server is not assigned", otpMsg.UserId)
 		return common.ErrKnockServerNotFound
@@ -83,13 +83,13 @@ func (a *UdpAgent) RegisterPublicKey(otp string, target *KnockTarget) (rakMsg *c
 		OrganizationId: a.knockUser.OrganizationId,
 		AuthServiceId:  target.AuthServiceId,
 		OTP:            otp,
-		PublicKey:      a.device.PublicKeyBase64(),
+		PublicKey:      a.PublicKeyBase64ByCipherScheme(),
 		UserData:       a.knockUser.UserData,
 	}
 	a.knockUserMutex.RUnlock()
 	regBytes, _ := json.Marshal(regMsg)
 
-	serverPeer := target.GetServerPeer()
+	serverPeer := target.GetServerPeerForScheme(a.config.DefaultCipherScheme)
 	if serverPeer == nil {
 		log.Critical("agent(%s)[RegisterPublicKey] server is not assigned", regMsg.UserId)
 		return nil, common.ErrKnockServerNotFound

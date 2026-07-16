@@ -528,6 +528,8 @@ $('#cipher-select').addEventListener('change', () => {
     $('#btn-keygen').textContent = 'Generate Key Pair';
     highlightProtocolPhase('keygen');
   }
+  // Rebuild server list so the correct public key (Curve25519 vs SM2) is shown.
+  populateServers();
 });
 
 function schemeBadge(scheme) {
@@ -559,13 +561,21 @@ $('#server-select').addEventListener('change', () => {
 
 function populateServers() {
   const sel = $('#server-select');
-  servers = configClusters.filter(c => c.publicKeyBase64).map((c, i) => ({
-    id: c.publicKeyBase64.substring(0, 11),
-    name: c.name || `Server ${i + 1}`,
-    serverHost: c.serverHost || '',
-    publicKeyBase64: c.publicKeyBase64,
-    cipherScheme: c.cipherScheme ?? 1,
-  }));
+  const currentScheme = cipherScheme === 'gmsm' ? 1 : 0;
+  servers = configClusters.filter(c => c.publicKeyBase64).map((c, i) => {
+    // Use the SM2 public key when the user selected GMSM and one is available;
+    // otherwise fall back to the Curve25519 key.
+    const pubKey = (currentScheme === 1 && c.publicKeyBase64SM2)
+      ? c.publicKeyBase64SM2
+      : c.publicKeyBase64;
+    return {
+      id: pubKey.substring(0, 11),
+      name: c.name || `Server ${i + 1}`,
+      serverHost: c.serverHost || '',
+      publicKeyBase64: pubKey,
+      cipherScheme: currentScheme,
+    };
+  });
 
   if (servers.length === 0) {
     sel.innerHTML = '<option value="">No servers in config.json</option>';
@@ -842,12 +852,12 @@ function generateDeviceId() {
       // Cipher scheme defaults to Curve25519 (the dropdown default); the
       // user selects it in Step 1 rather than inheriting it from config.
       if (Array.isArray(cfg.clusters)) {
-        const cs = cfg.cipherScheme === 'curve25519' ? 0 : 1;
         configClusters = cfg.clusters.map(c => ({
           name: c.name || '',
           serverHost: c.serverHost || '',
-          publicKeyBase64: c.serverPublicKey || '',
-          cipherScheme: cs,
+          publicKeyBase64:    c.serverPublicKey    || '',
+          publicKeyBase64SM2: c.serverPublicKeySM2 || '',
+          cipherScheme: 0,
         }));
       }
     }

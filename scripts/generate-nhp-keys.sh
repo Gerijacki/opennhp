@@ -102,6 +102,10 @@ EXISTING_SERVER2_PRIV=$(echo "$SECRETS_JSON" | jq -r '.nhp_server2_private_key /
 EXISTING_SERVER2_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_server2_public_key // empty')
 EXISTING_AC2_PRIV=$(echo "$SECRETS_JSON" | jq -r '.nhp_ac2_private_key // empty')
 EXISTING_AC2_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_ac2_public_key // empty')
+# SM2 public keys derived from server private keys (one private key → two public keys).
+# These are populated from existing data when reusing keys, or derived after keygen --both.
+EXISTING_SERVER_SM2_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_server_sm2_public_key // empty')
+EXISTING_SERVER2_SM2_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_server2_sm2_public_key // empty')
 
 # --- Generate or reuse keys ---
 generate_keys() {
@@ -133,12 +137,47 @@ generate_keys() {
   echo "$priv|$pub"
 }
 
+# generate_server_keys: uses --both to derive SM2 and Curve25519 public keys
+# from a single SM2 private key. Returns priv|curve25519_pub|sm2_pub.
+# When reusing, existing_sm2_pub may be empty for legacy secrets that only
+# stored one public key; in that case we fall through to regeneration so that
+# the SM2 public key gets populated.
+generate_server_keys() {
+  local binary="$1"
+  local name="$2"
+  local existing_priv="$3"
+  local existing_curve_pub="$4"
+  local existing_sm2_pub="$5"
+
+  if [[ "$REGENERATE" == "false" && -n "$existing_priv" && -n "$existing_curve_pub" && -n "$existing_sm2_pub" ]]; then
+    echo "  Reusing existing $name keys from AWS SM" >&2
+    echo "$existing_priv|$existing_curve_pub|$existing_sm2_pub"
+    return
+  fi
+
+  echo "  Generating new $name keys (--both)..." >&2
+  local raw_output keys_json
+  raw_output=$("$binary" keygen --both --json)
+  keys_json=$(echo "$raw_output" | grep -E '^\{.*"privateKey".*\}$' | tail -1)
+  if [ -z "$keys_json" ]; then
+    echo "  ERROR: no JSON output from $name keygen --both; raw output was:" >&2
+    echo "$raw_output" >&2
+    return 1
+  fi
+  local priv curve_pub sm2_pub
+  priv=$(echo "$keys_json" | jq -r '.privateKey')
+  curve_pub=$(echo "$keys_json" | jq -r '.curve25519PublicKey')
+  sm2_pub=$(echo "$keys_json" | jq -r '.sm2PublicKey')
+  echo "$priv|$curve_pub|$sm2_pub"
+}
+
 echo "--- Generating/loading keys ---"
 
-# Server keys
-SERVER_KEYS=$(generate_keys "$BINARY_DIR/nhp-server/nhp-serverd" "server" "$EXISTING_SERVER_PRIV" "$EXISTING_SERVER_PUB")
+# Server keys: one SM2 private key → Curve25519 public key + SM2 public key
+SERVER_KEYS=$(generate_server_keys "$BINARY_DIR/nhp-server/nhp-serverd" "server" "$EXISTING_SERVER_PRIV" "$EXISTING_SERVER_PUB" "$EXISTING_SERVER_SM2_PUB")
 NHP_SERVER_PRIVATE_KEY=$(echo "$SERVER_KEYS" | cut -d'|' -f1)
 NHP_SERVER_PUBLIC_KEY=$(echo "$SERVER_KEYS" | cut -d'|' -f2)
+NHP_SERVER_SM2_PUBLIC_KEY=$(echo "$SERVER_KEYS" | cut -d'|' -f3)
 
 # AC keys
 AC_KEYS=$(generate_keys "$BINARY_DIR/nhp-ac/nhp-acd" "ac" "$EXISTING_AC_PRIV" "$EXISTING_AC_PUB")
@@ -167,9 +206,10 @@ NHP_JSAGENT2_PRIVATE_KEY=$(echo "$JSAGENT2_KEYS" | cut -d'|' -f1)
 NHP_JSAGENT2_PUBLIC_KEY=$(echo "$JSAGENT2_KEYS" | cut -d'|' -f2)
 
 # Server cluster 2 keys (independent identity, isolated from cluster 1)
-SERVER2_KEYS=$(generate_keys "$BINARY_DIR/nhp-server/nhp-serverd" "server2" "$EXISTING_SERVER2_PRIV" "$EXISTING_SERVER2_PUB")
+SERVER2_KEYS=$(generate_server_keys "$BINARY_DIR/nhp-server/nhp-serverd" "server2" "$EXISTING_SERVER2_PRIV" "$EXISTING_SERVER2_PUB" "$EXISTING_SERVER2_SM2_PUB")
 NHP_SERVER2_PRIVATE_KEY=$(echo "$SERVER2_KEYS" | cut -d'|' -f1)
 NHP_SERVER2_PUBLIC_KEY=$(echo "$SERVER2_KEYS" | cut -d'|' -f2)
+NHP_SERVER2_SM2_PUBLIC_KEY=$(echo "$SERVER2_KEYS" | cut -d'|' -f3)
 
 AC2_KEYS=$(generate_keys "$BINARY_DIR/nhp-ac/nhp-acd" "ac2" "$EXISTING_AC2_PRIV" "$EXISTING_AC2_PUB")
 NHP_AC2_PRIVATE_KEY=$(echo "$AC2_KEYS" | cut -d'|' -f1)
@@ -177,13 +217,15 @@ NHP_AC2_PUBLIC_KEY=$(echo "$AC2_KEYS" | cut -d'|' -f2)
 
 echo ""
 echo "--- Key summary ---"
-echo "  Server public key: ${NHP_SERVER_PUBLIC_KEY:0:20}..."
+echo "  Server public key (Curve25519): ${NHP_SERVER_PUBLIC_KEY:0:20}..."
+echo "  Server public key (SM2):        ${NHP_SERVER_SM2_PUBLIC_KEY:0:20}..."
 echo "  AC public key:     ${NHP_AC_PUBLIC_KEY:0:20}..."
 echo "  Relay public key:  ${NHP_RELAY_PUBLIC_KEY:0:20}..."
 echo "  Agent public key:    ${NHP_AGENT_PUBLIC_KEY:0:20}..."
 echo "  js-agent public key:  ${NHP_JSAGENT_PUBLIC_KEY:0:20}..."
 echo "  js-agent2 public key: ${NHP_JSAGENT2_PUBLIC_KEY:0:20}..."
-echo "  Server2 public key:  ${NHP_SERVER2_PUBLIC_KEY:0:20}..."
+echo "  Server2 public key (Curve25519): ${NHP_SERVER2_PUBLIC_KEY:0:20}..."
+echo "  Server2 public key (SM2):        ${NHP_SERVER2_SM2_PUBLIC_KEY:0:20}..."
 echo "  AC2 public key:      ${NHP_AC2_PUBLIC_KEY:0:20}..."
 echo ""
 
@@ -194,6 +236,7 @@ echo "--- Saving keys to AWS Secrets Manager ---"
 UPDATED_SECRETS=$(echo "$SECRETS_JSON" | jq \
   --arg sk "$NHP_SERVER_PRIVATE_KEY" \
   --arg sp "$NHP_SERVER_PUBLIC_KEY" \
+  --arg ssp "$NHP_SERVER_SM2_PUBLIC_KEY" \
   --arg ak "$NHP_AC_PRIVATE_KEY" \
   --arg ap "$NHP_AC_PUBLIC_KEY" \
   --arg rk "$NHP_RELAY_PRIVATE_KEY" \
@@ -206,11 +249,13 @@ UPDATED_SECRETS=$(echo "$SECRETS_JSON" | jq \
   --arg j2p "$NHP_JSAGENT2_PUBLIC_KEY" \
   --arg s2k "$NHP_SERVER2_PRIVATE_KEY" \
   --arg s2p "$NHP_SERVER2_PUBLIC_KEY" \
+  --arg s2sp "$NHP_SERVER2_SM2_PUBLIC_KEY" \
   --arg a2k "$NHP_AC2_PRIVATE_KEY" \
   --arg a2p "$NHP_AC2_PUBLIC_KEY" \
   '. + {
     nhp_server_private_key: $sk,
     nhp_server_public_key: $sp,
+    nhp_server_sm2_public_key: $ssp,
     nhp_ac_private_key: $ak,
     nhp_ac_public_key: $ap,
     nhp_relay_private_key: $rk,
@@ -223,6 +268,7 @@ UPDATED_SECRETS=$(echo "$SECRETS_JSON" | jq \
     nhp_jsagent2_public_key: $j2p,
     nhp_server2_private_key: $s2k,
     nhp_server2_public_key: $s2p,
+    nhp_server2_sm2_public_key: $s2sp,
     nhp_ac2_private_key: $a2k,
     nhp_ac2_public_key: $a2p
   }')
@@ -238,13 +284,13 @@ echo ""
 # --- Render config templates ---
 echo "--- Rendering config templates ---"
 
-export NHP_SERVER_PRIVATE_KEY NHP_SERVER_PUBLIC_KEY
+export NHP_SERVER_PRIVATE_KEY NHP_SERVER_PUBLIC_KEY NHP_SERVER_SM2_PUBLIC_KEY
 export NHP_AC_PRIVATE_KEY NHP_AC_PUBLIC_KEY
 export NHP_RELAY_PRIVATE_KEY NHP_RELAY_PUBLIC_KEY
 export NHP_AGENT_PRIVATE_KEY NHP_AGENT_PUBLIC_KEY
 export NHP_JSAGENT_PRIVATE_KEY NHP_JSAGENT_PUBLIC_KEY
 export NHP_JSAGENT2_PRIVATE_KEY NHP_JSAGENT2_PUBLIC_KEY
-export NHP_SERVER2_PRIVATE_KEY NHP_SERVER2_PUBLIC_KEY
+export NHP_SERVER2_PRIVATE_KEY NHP_SERVER2_PUBLIC_KEY NHP_SERVER2_SM2_PUBLIC_KEY
 export NHP_AC2_PRIVATE_KEY NHP_AC2_PUBLIC_KEY
 export SERVER_PRIVATE_IP="$SERVER_PRIVATE_IP"
 export AC_PRIVATE_IP="$AC_PRIVATE_IP"

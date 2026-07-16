@@ -1254,6 +1254,10 @@ if (result.success) {
         ? cfg.serverPublicKeySM2
         : cfg.serverPublicKey;
       apply('serverPubKey', serverPub);
+      // Store the Curve25519 key in dataset so doKnock can pass it as
+      // relayPublicKey regardless of the active cipher scheme.
+      const spEl = document.getElementById('serverPubKey');
+      if (spEl && cfg.serverPublicKey) spEl.dataset.curveKey = cfg.serverPublicKey;
       apply('userId',       cfg.userId);
       apply('deviceId',     cfg.deviceId);
       apply('orgId',        cfg.orgId);
@@ -1402,7 +1406,12 @@ if (result.success) {
       const pk = activeServerPubKey(opt);
       if (pk) {
         const el = document.getElementById('serverPubKey');
-        if (el) el.value = pk;
+        if (el) {
+          el.value = pk;
+          // Always store the Curve25519 key alongside so doKnock can pass it
+          // as relayPublicKey for relay URL fingerprint derivation.
+          el.dataset.curveKey = opt.dataset.pubkey || '';
+        }
       }
       const ak = opt.dataset.agentkey;
       if (ak) {
@@ -1803,7 +1812,13 @@ if (result.success) {
       agent.setIdentity({ userId, deviceId, organizationId: orgId });
       log('info', t('log.identity', { userId, deviceId }));
 
-      agent.addServer({ publicKey: serverPubKey });
+      agent.addServer({
+        publicKey: serverPubKey,
+        // When GMSM is selected, serverPubKey is the SM2 key (used for
+        // encryption). The relay registers servers by Curve25519 fingerprint,
+        // so supply the Curve25519 key separately for relay URL derivation.
+        relayPublicKey: document.getElementById('serverPubKey')?.dataset.curveKey || undefined,
+      });
       log('info', t('log.serverPubKey', { key: serverPubKey.substring(0, 20) }));
       setStep('identity', 'done');
 

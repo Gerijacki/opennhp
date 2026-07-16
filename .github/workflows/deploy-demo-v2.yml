@@ -1309,9 +1309,11 @@ jobs:
           SERVER2_SM2_PUB=$(echo "$SECRETS" | jq -r '.nhp_server2_sm2_public_key')
           JS_PRIV=$(echo "$SECRETS" | jq -r '.nhp_jsagent_private_key')
           JS_PUB=$(echo "$SECRETS" | jq -r '.nhp_jsagent_public_key')
+          JS_SM2_PUB=$(echo "$SECRETS" | jq -r '.nhp_jsagent_sm2_public_key')
           # Cluster 2 has its own js-agent identity (trusted only by server2).
           JS2_PRIV=$(echo "$SECRETS" | jq -r '.nhp_jsagent2_private_key')
           JS2_PUB=$(echo "$SECRETS" | jq -r '.nhp_jsagent2_public_key')
+          JS2_SM2_PUB=$(echo "$SECRETS" | jq -r '.nhp_jsagent2_sm2_public_key')
           CF_TOKEN=$(echo "$SECRETS" | jq -r '.cloudflare_api_token')
 
           echo "::add-mask::$JS_PRIV"
@@ -1324,8 +1326,10 @@ jobs:
           echo "server2_sm2_pub=$SERVER2_SM2_PUB" >> $GITHUB_OUTPUT
           echo "js_priv=$JS_PRIV"               >> $GITHUB_OUTPUT
           echo "js_pub=$JS_PUB"                 >> $GITHUB_OUTPUT
+          echo "js_sm2_pub=$JS_SM2_PUB"         >> $GITHUB_OUTPUT
           echo "js2_priv=$JS2_PRIV"             >> $GITHUB_OUTPUT
           echo "js2_pub=$JS2_PUB"               >> $GITHUB_OUTPUT
+          echo "js2_sm2_pub=$JS2_SM2_PUB"       >> $GITHUB_OUTPUT
           echo "cf_token=$CF_TOKEN"             >> $GITHUB_OUTPUT
 
       - name: Assemble deploy bundle

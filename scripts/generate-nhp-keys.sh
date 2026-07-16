@@ -93,10 +93,12 @@ EXISTING_AGENT_PRIV=$(echo "$SECRETS_JSON" | jq -r '.nhp_agent_private_key // em
 EXISTING_AGENT_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_agent_public_key // empty')
 EXISTING_JSAGENT_PRIV=$(echo "$SECRETS_JSON" | jq -r '.nhp_jsagent_private_key // empty')
 EXISTING_JSAGENT_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_jsagent_public_key // empty')
+EXISTING_JSAGENT_SM2_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_jsagent_sm2_public_key // empty')
 # Cluster 2 js-agent: independent browser-demo identity so cluster 1 and
 # cluster 2 do not share an agent key (each nhp-server trusts only its own).
 EXISTING_JSAGENT2_PRIV=$(echo "$SECRETS_JSON" | jq -r '.nhp_jsagent2_private_key // empty')
 EXISTING_JSAGENT2_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_jsagent2_public_key // empty')
+EXISTING_JSAGENT2_SM2_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_jsagent2_sm2_public_key // empty')
 # Server cluster 2 (independent key pairs; see CLAUDE.md opennhp/demo schema)
 EXISTING_SERVER2_PRIV=$(echo "$SECRETS_JSON" | jq -r '.nhp_server2_private_key // empty')
 EXISTING_SERVER2_PUB=$(echo "$SECRETS_JSON" | jq -r '.nhp_server2_public_key // empty')
@@ -195,15 +197,19 @@ NHP_AGENT_PRIVATE_KEY=$(echo "$AGENT_KEYS" | cut -d'|' -f1)
 NHP_AGENT_PUBLIC_KEY=$(echo "$AGENT_KEYS" | cut -d'|' -f2)
 
 # js-agent keys (browser-side client; private key consumed from AWS SM by the js-agent repo)
-JSAGENT_KEYS=$(generate_keys "$BINARY_DIR/nhp-server/nhp-serverd" "js-agent" "$EXISTING_JSAGENT_PRIV" "$EXISTING_JSAGENT_PUB")
+# Uses --both so both Curve25519 and SM2 public keys are derived from the same private key.
+# Both public keys are registered in server/agent.toml so the agent can knock in either cipher scheme.
+JSAGENT_KEYS=$(generate_server_keys "$BINARY_DIR/nhp-server/nhp-serverd" "js-agent" "$EXISTING_JSAGENT_PRIV" "$EXISTING_JSAGENT_PUB" "$EXISTING_JSAGENT_SM2_PUB")
 NHP_JSAGENT_PRIVATE_KEY=$(echo "$JSAGENT_KEYS" | cut -d'|' -f1)
 NHP_JSAGENT_PUBLIC_KEY=$(echo "$JSAGENT_KEYS" | cut -d'|' -f2)
+NHP_JSAGENT_SM2_PUBLIC_KEY=$(echo "$JSAGENT_KEYS" | cut -d'|' -f3)
 
 # Cluster 2 js-agent keys (independent browser-demo identity; trusted only by
 # server cluster 2, so the cluster 1 and cluster 2 demo agents are isolated)
-JSAGENT2_KEYS=$(generate_keys "$BINARY_DIR/nhp-server/nhp-serverd" "js-agent2" "$EXISTING_JSAGENT2_PRIV" "$EXISTING_JSAGENT2_PUB")
+JSAGENT2_KEYS=$(generate_server_keys "$BINARY_DIR/nhp-server/nhp-serverd" "js-agent2" "$EXISTING_JSAGENT2_PRIV" "$EXISTING_JSAGENT2_PUB" "$EXISTING_JSAGENT2_SM2_PUB")
 NHP_JSAGENT2_PRIVATE_KEY=$(echo "$JSAGENT2_KEYS" | cut -d'|' -f1)
 NHP_JSAGENT2_PUBLIC_KEY=$(echo "$JSAGENT2_KEYS" | cut -d'|' -f2)
+NHP_JSAGENT2_SM2_PUBLIC_KEY=$(echo "$JSAGENT2_KEYS" | cut -d'|' -f3)
 
 # Server cluster 2 keys (independent identity, isolated from cluster 1)
 SERVER2_KEYS=$(generate_server_keys "$BINARY_DIR/nhp-server/nhp-serverd" "server2" "$EXISTING_SERVER2_PRIV" "$EXISTING_SERVER2_PUB" "$EXISTING_SERVER2_SM2_PUB")
@@ -222,8 +228,10 @@ echo "  Server public key (SM2):        ${NHP_SERVER_SM2_PUBLIC_KEY:0:20}..."
 echo "  AC public key:     ${NHP_AC_PUBLIC_KEY:0:20}..."
 echo "  Relay public key:  ${NHP_RELAY_PUBLIC_KEY:0:20}..."
 echo "  Agent public key:    ${NHP_AGENT_PUBLIC_KEY:0:20}..."
-echo "  js-agent public key:  ${NHP_JSAGENT_PUBLIC_KEY:0:20}..."
-echo "  js-agent2 public key: ${NHP_JSAGENT2_PUBLIC_KEY:0:20}..."
+echo "  js-agent public key (Curve25519):  ${NHP_JSAGENT_PUBLIC_KEY:0:20}..."
+echo "  js-agent public key (SM2):         ${NHP_JSAGENT_SM2_PUBLIC_KEY:0:20}..."
+echo "  js-agent2 public key (Curve25519): ${NHP_JSAGENT2_PUBLIC_KEY:0:20}..."
+echo "  js-agent2 public key (SM2):        ${NHP_JSAGENT2_SM2_PUBLIC_KEY:0:20}..."
 echo "  Server2 public key (Curve25519): ${NHP_SERVER2_PUBLIC_KEY:0:20}..."
 echo "  Server2 public key (SM2):        ${NHP_SERVER2_SM2_PUBLIC_KEY:0:20}..."
 echo "  AC2 public key:      ${NHP_AC2_PUBLIC_KEY:0:20}..."
@@ -245,8 +253,10 @@ UPDATED_SECRETS=$(echo "$SECRETS_JSON" | jq \
   --arg agp "$NHP_AGENT_PUBLIC_KEY" \
   --arg jk "$NHP_JSAGENT_PRIVATE_KEY" \
   --arg jp "$NHP_JSAGENT_PUBLIC_KEY" \
+  --arg jsp "$NHP_JSAGENT_SM2_PUBLIC_KEY" \
   --arg j2k "$NHP_JSAGENT2_PRIVATE_KEY" \
   --arg j2p "$NHP_JSAGENT2_PUBLIC_KEY" \
+  --arg j2sp "$NHP_JSAGENT2_SM2_PUBLIC_KEY" \
   --arg s2k "$NHP_SERVER2_PRIVATE_KEY" \
   --arg s2p "$NHP_SERVER2_PUBLIC_KEY" \
   --arg s2sp "$NHP_SERVER2_SM2_PUBLIC_KEY" \
@@ -264,8 +274,10 @@ UPDATED_SECRETS=$(echo "$SECRETS_JSON" | jq \
     nhp_agent_public_key: $agp,
     nhp_jsagent_private_key: $jk,
     nhp_jsagent_public_key: $jp,
+    nhp_jsagent_sm2_public_key: $jsp,
     nhp_jsagent2_private_key: $j2k,
     nhp_jsagent2_public_key: $j2p,
+    nhp_jsagent2_sm2_public_key: $j2sp,
     nhp_server2_private_key: $s2k,
     nhp_server2_public_key: $s2p,
     nhp_server2_sm2_public_key: $s2sp,
@@ -288,8 +300,8 @@ export NHP_SERVER_PRIVATE_KEY NHP_SERVER_PUBLIC_KEY NHP_SERVER_SM2_PUBLIC_KEY
 export NHP_AC_PRIVATE_KEY NHP_AC_PUBLIC_KEY
 export NHP_RELAY_PRIVATE_KEY NHP_RELAY_PUBLIC_KEY
 export NHP_AGENT_PRIVATE_KEY NHP_AGENT_PUBLIC_KEY
-export NHP_JSAGENT_PRIVATE_KEY NHP_JSAGENT_PUBLIC_KEY
-export NHP_JSAGENT2_PRIVATE_KEY NHP_JSAGENT2_PUBLIC_KEY
+export NHP_JSAGENT_PRIVATE_KEY NHP_JSAGENT_PUBLIC_KEY NHP_JSAGENT_SM2_PUBLIC_KEY
+export NHP_JSAGENT2_PRIVATE_KEY NHP_JSAGENT2_PUBLIC_KEY NHP_JSAGENT2_SM2_PUBLIC_KEY
 export NHP_SERVER2_PRIVATE_KEY NHP_SERVER2_PUBLIC_KEY NHP_SERVER2_SM2_PUBLIC_KEY
 export NHP_AC2_PRIVATE_KEY NHP_AC2_PUBLIC_KEY
 export SERVER_PRIVATE_IP="$SERVER_PRIVATE_IP"

@@ -284,9 +284,14 @@ type UdpAgent struct {
 	serverClusterMap    map[string]*ServerCluster // indexed by PublicKeyBase64
 	serverClusterByName map[string]*ServerCluster // indexed by ClusterConfig.Name; shares the same *ServerCluster values
 
-	device  *core.Device
-	wg      sync.WaitGroup
-	running atomic.Bool
+	// deviceMutex guards device and recvMsgCh across ReinitWithKey, which
+	// hot-swaps the device (and its DecryptedMsgQueue) after registration
+	// generates a fresh key pair. Writers take Lock; the receive routine
+	// takes RLock once to capture its channel at spawn time.
+	deviceMutex sync.RWMutex
+	device      *core.Device
+	wg          sync.WaitGroup
+	running     atomic.Bool
 
 	signals struct {
 		stop                  chan struct{}
@@ -541,22 +546,40 @@ func (a *UdpAgent) PrivateKeyBase64() string {
 // private key bytes, and re-adds all known server peers. Call this after
 // Start() when a fresh key pair has been generated for registration.
 func (a *UdpAgent) ReinitWithKey(privKeyBytes []byte, cipherScheme int) error {
-	a.device.Stop()
 	newDev := core.NewDevice(core.NHP_AGENT, privKeyBytes, nil)
 	if newDev == nil {
 		return fmt.Errorf("failed to create device from new key")
 	}
+	newDev.Start()
+
+	// Swap in the new device and repoint the receive channel atomically.
+	// Without repointing recvMsgCh, the old routine keeps reading the old
+	// (about-to-be-closed) DecryptedMsgQueue and nothing drains the new
+	// device's queue — cookie challenges and generic replies would be
+	// silently dropped after a reinit.
+	a.deviceMutex.Lock()
+	oldDev := a.device
 	a.device = newDev
+	a.recvMsgCh = newDev.DecryptedMsgQueue
+	a.deviceMutex.Unlock()
+
 	a.config.PrivateKeyBase64 = base64.StdEncoding.EncodeToString(privKeyBytes)
 	a.config.DefaultCipherScheme = cipherScheme
-	a.device.Start()
+
+	// Stopping the old device closes its DecryptedMsgQueue, so the
+	// existing recvMessageRoutine (blocked on the old channel) observes a
+	// closed channel and exits. Spawn a fresh routine bound to the new
+	// queue to replace it.
+	oldDev.Stop()
+	a.wg.Add(1)
+	go a.recvMessageRoutine()
 
 	// Re-register all known server peers with the new device so outgoing
 	// packets are encrypted to their public keys.
 	a.serverPeerMutex.Lock()
 	defer a.serverPeerMutex.Unlock()
 	for _, sc := range a.serverClusterMap {
-		a.device.AddPeer(sc.RepresentativePeer())
+		newDev.AddPeer(sc.RepresentativePeer())
 	}
 	return nil
 }
@@ -863,12 +886,19 @@ func (a *UdpAgent) recvMessageRoutine() {
 
 	log.Info("recvMessageRoutine started")
 
+	// Bind to the current receive channel once. ReinitWithKey repoints
+	// a.recvMsgCh and spawns a fresh routine, so each routine instance
+	// stays bound to the device that was current when it started.
+	a.deviceMutex.RLock()
+	ch := a.recvMsgCh
+	a.deviceMutex.RUnlock()
+
 	for {
 		select {
 		case <-a.signals.stop:
 			return
 
-		case ppd, ok := <-a.recvMsgCh:
+		case ppd, ok := <-ch:
 			if !ok {
 				return
 			}

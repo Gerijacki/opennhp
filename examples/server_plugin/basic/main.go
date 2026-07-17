@@ -49,7 +49,7 @@ var (
 
 var (
 	name    = "example"
-	version = "0.1.1"
+	version = "0.2.0" // RegisterKeyFunc gained a cipherScheme parameter (dual-cipher support)
 
 	baseConfigWatch io.Closer
 	resConfigWatch  io.Closer

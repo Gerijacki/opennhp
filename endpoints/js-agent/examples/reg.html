@@ -75,45 +75,48 @@
     border-top: 1px solid #30363d; padding-top: 12px;
   }
   .protocol .phase-note b { color: #c9d1d9; font-weight: 600; }
-  .msg-spec { margin-top: 16px; border-top: 1px solid #30363d; padding-top: 14px; }
-  .msg-spec h3 {
-    font-size: 12px; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;
+  /* API examples section */
+  .api-examples { margin-top: 16px; border-top: 1px solid #30363d; padding-top: 14px; }
+  .api-examples h3 { font-size: 13px; color: #c9d1d9; margin-bottom: 10px; font-weight: 600; }
+  .tab-bar {
+    display: flex; gap: 2px; margin-bottom: 0;
+    border-bottom: 1px solid #30363d;
   }
-  .msg-spec h3 .dir { font-size: 10px; font-weight: 400; color: #8b949e; }
-  .msg-spec .tag {
-    font-family: ui-monospace, Consolas, monospace; font-size: 11px; font-weight: 600;
-    padding: 1px 7px; border-radius: 3px;
+  .tab-btn {
+    background: none; border: none; border-bottom: 2px solid transparent;
+    color: #8b949e; font-size: 12px; font-family: inherit; font-weight: 500;
+    padding: 6px 14px; cursor: pointer; margin-bottom: -1px;
   }
-  .msg-spec .tag-otp { background: #10233f; color: #96c8ff; border: 1px solid #1f4f8f; }
-  .msg-spec .tag-reg { background: #10331c; color: #7ee787; border: 1px solid #2ea043; }
-  .msg-spec .tag-rak { background: #2a1e10; color: #e3b341; border: 1px solid #8f6a1f; }
-  .msg-spec dl {
-    margin: 0 0 14px 0; display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px;
-    font-size: 12px; line-height: 1.5;
+  .tab-btn:hover { color: #c9d1d9; }
+  .tab-btn.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .code-block {
+    background: #010409; border: 1px solid #30363d; border-radius: 0 4px 4px 4px;
+    padding: 12px 14px; font-family: ui-monospace, Consolas, 'Courier New', monospace;
+    font-size: 11px; line-height: 1.65; overflow-x: auto; white-space: pre;
+    color: #c9d1d9; margin: 0;
   }
-  .msg-spec dt {
-    font-family: ui-monospace, Consolas, monospace; color: #c9d1d9; font-size: 11px;
+  .code-block .c-comment { color: #6e7681; }
+  .code-block .c-kw   { color: #ff7b72; }
+  .code-block .c-fn   { color: #d2a8ff; }
+  .code-block .c-str  { color: #a5d6ff; }
+  .code-block .c-num  { color: #79c0ff; }
+  .code-block .c-id   { color: #c9d1d9; }
+  .code-block .c-type { color: #ffa657; }
+  .api-note {
+    font-size: 11px; color: #8b949e; line-height: 1.6; margin-top: 10px;
+    padding: 8px 10px; background: #0d1f38; border-left: 3px solid #1f4f8f;
+    border-radius: 0 4px 4px 0;
   }
-  .msg-spec dd { margin: 0; color: #8b949e; }
-  .msg-spec dd .opt { color: #6e7681; font-style: italic; }
-  @media (max-width: 480px) { .msg-spec dl { grid-template-columns: 100px 1fr; } }
-  .verify-note {
-    background: #10331c; border: 1px solid #2ea043; border-radius: 6px;
-    padding: 12px 14px; margin: 0 0 14px 0; font-size: 12px; line-height: 1.6;
-    color: #9be6a4;
-  }
-  .verify-note .verify-title {
-    color: #7ee787; font-weight: 700; font-size: 12px; margin-bottom: 6px;
-  }
-  .verify-note p { margin: 0 0 6px 0; }
-  .verify-note b { color: #d4f5c9; font-weight: 600; }
-  .verify-note ol { margin: 4px 0 6px 18px; padding: 0; }
-  .verify-note li { margin-bottom: 4px; }
-  .verify-note code {
+  .api-note code {
     font-family: ui-monospace, Consolas, monospace; font-size: 11px;
-    background: #04240f; padding: 0 4px; border-radius: 3px; color: #b9f0c2;
+    background: #061526; padding: 0 4px; border-radius: 3px; color: #96c8ff;
   }
-  .verify-note .verify-foot { color: #6ea97a; margin-top: 8px; margin-bottom: 0; }
+  .step-divider {
+    font-size: 11px; font-weight: 600; color: #6e7681; text-transform: uppercase;
+    letter-spacing: 0.06em; margin: 12px 0 6px 0;
+  }
   /* Sequence diagram theming + active-phase highlight */
   .seq-lane { fill: #1c2333; stroke: #4d5566; stroke-width: 1; }
   .seq-lane-label { fill: #e6edf3; font-size: 11px; font-weight: 600; }
@@ -402,53 +405,118 @@
       <text class="seq-msg-label" x="127" y="336" text-anchor="middle">NHP-RAK: success</text>
     </g>
   </svg>
-  <div class="msg-spec">
-    <h3><span class="tag tag-otp">NHP-OTP</span> <span class="dir">Agent &rarr; Server</span></h3>
-    <dl>
-      <dt>usrId</dt><dd>user identity (the email the code is sent to)</dd>
-      <dt>devId</dt><dd>device identifier</dd>
-      <dt>aspId</dt><dd>auth service provider that issues the code</dd>
-      <dt>pubKey</dt><dd>the public key generated in Step 1 — bound to this OTP at issuance</dd>
-      <dt>orgId</dt><dd><span class="opt">optional</span> organization</dd>
-      <dt>usrData</dt><dd><span class="opt">optional</span> extra fields (e.g. <code>phone</code>)</dd>
-    </dl>
-
-    <h3><span class="tag tag-reg">NHP-REG</span> <span class="dir">Agent &rarr; Server</span></h3>
-    <dl>
-      <dt>usrId</dt><dd>same identity as the OTP request</dd>
-      <dt>devId</dt><dd>same device identifier</dd>
-      <dt>aspId</dt><dd>auth service provider</dd>
-      <dt>otp</dt><dd>the 6-digit code received by email</dd>
-      <dt>pubKey</dt><dd>public key to register — must match the one bound at OTP time and the Noise handshake key</dd>
-      <dt>orgId</dt><dd><span class="opt">optional</span> organization</dd>
-    </dl>
-
-    <div class="verify-note">
-      <div class="verify-title">Signature &amp; verification</div>
-      <p>NHP-REG is sent inside a <b>Noise handshake</b> keyed with the agent's Step-1
-      private key. Completing that handshake is the signature — it cryptographically
-      proves the sender holds the private key for <code>pubKey</code>, without ever
-      transmitting the private key or a separate signature field.</p>
-      <p>On receipt the server verifies, in order:</p>
-      <ol>
-        <li><b>OTP</b> is valid, unused, unexpired, and was issued for this
-        <code>usrId</code> / <code>devId</code>.</li>
-        <li><b>Key binding</b> — <code>pubKey</code> equals the key committed in the
-        NHP-OTP request <em>and</em> the static key proven in the Noise handshake
-        (mismatch → rejected).</li>
-        <li>Only then is the key registered and <b>NHP-RAK</b> returned.</li>
-      </ol>
-      <p class="verify-foot">A stolen OTP alone is useless: without the matching
-      private key the handshake fails, and a different key fails the binding check.</p>
+  <div class="api-examples">
+    <h3>API Usage Examples</h3>
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab(event,'tab-js')">JavaScript SDK</button>
+      <button class="tab-btn" onclick="switchTab(event,'tab-ts')">TypeScript</button>
+      <button class="tab-btn" onclick="switchTab(event,'tab-curl')">curl / HTTP</button>
     </div>
 
-    <h3><span class="tag tag-rak">NHP-RAK</span> <span class="dir">Server &rarr; Agent</span></h3>
-    <dl>
-      <dt>errCode</dt><dd><code>0</code> on success, otherwise an error code</dd>
-      <dt>errMsg</dt><dd>human-readable reason when <code>errCode</code> &ne; 0</dd>
-      <dt>aspId</dt><dd>auth service provider that handled registration</dd>
-      <dt>expiresAt</dt><dd><span class="opt">optional</span> when the registered key expires (unix seconds); omitted if it never expires</dd>
-    </dl>
+    <!-- JavaScript SDK tab -->
+    <div id="tab-js" class="tab-panel active">
+      <pre class="code-block"><span class="c-comment">// npm install @opennhp/agent</span>
+<span class="c-kw">import</span> { <span class="c-type">NHPAgent</span> } <span class="c-kw">from</span> <span class="c-str">'@opennhp/agent'</span>;
+
+<span class="c-comment">// ── Step 1: generate key pair ─────────────────</span>
+<span class="c-kw">const</span> <span class="c-id">agent</span> = <span class="c-kw">new</span> <span class="c-fn">NHPAgent</span>({
+  cipherScheme: <span class="c-str">'curve25519'</span>,  <span class="c-comment">// or 'gmsm'</span>
+  transport:    <span class="c-str">'relay'</span>,
+  relayUrl:     <span class="c-str">'https://relay.opennhp.org/relay'</span>,
+});
+<span class="c-kw">await</span> <span class="c-id">agent</span>.<span class="c-fn">init</span>();
+
+<span class="c-id">agent</span>.<span class="c-fn">addServer</span>({ publicKey: <span class="c-str">'&lt;server-public-key-base64&gt;'</span> });
+<span class="c-id">agent</span>.<span class="c-fn">setIdentity</span>({
+  userId:   <span class="c-str">'alice@example.com'</span>,
+  deviceId: <span class="c-str">'my-laptop-01'</span>,
+});
+
+<span class="c-comment">// ── Step 2: request OTP (NHP-OTP) ─────────────</span>
+<span class="c-kw">const</span> <span class="c-id">otpResult</span> = <span class="c-kw">await</span> <span class="c-id">agent</span>.<span class="c-fn">requestOtp</span>(
+  <span class="c-str">'example'</span>,               <span class="c-comment">// Auth Service Provider ID</span>
+  { email: <span class="c-str">'alice@example.com'</span> },
+);
+<span class="c-comment">// Server emails alice@example.com a 6-digit code</span>
+
+<span class="c-comment">// ── Step 3: register key (NHP-REG) ────────────</span>
+<span class="c-kw">const</span> <span class="c-id">regResult</span> = <span class="c-kw">await</span> <span class="c-id">agent</span>.<span class="c-fn">registerPublicKey</span>(
+  <span class="c-str">'example'</span>,               <span class="c-comment">// same ASP ID</span>
+  <span class="c-str">'123456'</span>,               <span class="c-comment">// OTP from email</span>
+  { email: <span class="c-str">'alice@example.com'</span> },
+);
+
+<span class="c-kw">if</span> (regResult.success) {
+  <span class="c-id">console</span>.<span class="c-fn">log</span>(<span class="c-str">'Registered! Public key:'</span>, agent.<span class="c-fn">getPublicKey</span>());
+  <span class="c-comment">// regResult.expiresAt — unix-seconds, or undefined if no TTL</span>
+} <span class="c-kw">else</span> {
+  <span class="c-id">console</span>.<span class="c-fn">error</span>(regResult.error, regResult.errorCode);
+}</pre>
+      <p class="api-note">The private key never leaves the device. <code>registerPublicKey()</code> sends the NHP-REG packet inside a Noise handshake that cryptographically proves key possession — no separate signature field needed.</p>
+    </div>
+
+    <!-- TypeScript tab -->
+    <div id="tab-ts" class="tab-panel">
+      <pre class="code-block"><span class="c-kw">import</span> { <span class="c-type">NHPAgent</span>, <span class="c-type">OtpResult</span>, <span class="c-type">RegisterResult</span> } <span class="c-kw">from</span> <span class="c-str">'@opennhp/agent'</span>;
+
+<span class="c-kw">const</span> <span class="c-id">agent</span> = <span class="c-kw">new</span> <span class="c-fn">NHPAgent</span>({
+  cipherScheme: <span class="c-str">'curve25519'</span>,
+  transport:    <span class="c-str">'relay'</span>,
+  relayUrl:     <span class="c-str">'https://relay.opennhp.org/relay'</span>,
+});
+<span class="c-kw">await</span> <span class="c-id">agent</span>.<span class="c-fn">init</span>();
+
+<span class="c-id">agent</span>.<span class="c-fn">addServer</span>({ publicKey: <span class="c-str">'&lt;server-public-key-base64&gt;'</span> });
+<span class="c-id">agent</span>.<span class="c-fn">setIdentity</span>({ userId: <span class="c-str">'alice@example.com'</span>, deviceId: <span class="c-str">'my-laptop-01'</span> });
+
+<span class="c-comment">// Step 2 — NHP-OTP</span>
+<span class="c-kw">const</span> <span class="c-id">otp</span>: <span class="c-type">OtpResult</span> = <span class="c-kw">await</span> <span class="c-id">agent</span>.<span class="c-fn">requestOtp</span>(<span class="c-str">'example'</span>);
+<span class="c-kw">if</span> (!otp.success) <span class="c-kw">throw new</span> <span class="c-type">Error</span>(otp.error);
+
+<span class="c-comment">// Step 3 — NHP-REG (otp from email)</span>
+<span class="c-kw">const</span> <span class="c-id">reg</span>: <span class="c-type">RegisterResult</span> = <span class="c-kw">await</span> <span class="c-id">agent</span>.<span class="c-fn">registerPublicKey</span>(
+  <span class="c-str">'example'</span>, <span class="c-str">'123456'</span>,
+);
+<span class="c-kw">if</span> (reg.success) {
+  <span class="c-kw">const</span> pubKey: <span class="c-type">string</span> = <span class="c-id">agent</span>.<span class="c-fn">getPublicKey</span>();
+  <span class="c-kw">const</span> expiresAt: <span class="c-type">number</span> | <span class="c-type">undefined</span> = reg.expiresAt;
+}</pre>
+      <p class="api-note">Full type definitions are shipped with the package. <code>OtpResult</code> and <code>RegisterResult</code> are both exported from <code>@opennhp/agent</code>.</p>
+    </div>
+
+    <!-- curl / HTTP tab -->
+    <div id="tab-curl" class="tab-panel">
+      <div class="step-divider">Step 2 — NHP-OTP (request code)</div>
+      <pre class="code-block"><span class="c-comment"># The NHP-OTP packet is binary (Noise-encrypted UDP/relay).
+# Use the JS SDK above, or any language binding.
+# Example via the HTTP relay endpoint:</span>
+
+curl -X POST https://relay.opennhp.org/relay/<span class="c-str">&lt;server-fingerprint&gt;</span> \
+  -H <span class="c-str">"Content-Type: application/octet-stream"</span> \
+  --data-binary @nhp-otp-packet.bin
+
+<span class="c-comment"># Build nhp-otp-packet.bin with the CLI tool:</span>
+nhp-agentd otp \
+  --server  <span class="c-str">&lt;server-public-key-base64&gt;</span> \
+  --user    alice@example.com \
+  --device  my-laptop-01 \
+  --asp     example \
+  --relay   https://relay.opennhp.org/relay</pre>
+
+      <div class="step-divider">Step 3 — NHP-REG (register key)</div>
+      <pre class="code-block"><span class="c-comment"># After receiving the 6-digit code by email:</span>
+nhp-agentd register \
+  --server  <span class="c-str">&lt;server-public-key-base64&gt;</span> \
+  --user    alice@example.com \
+  --device  my-laptop-01 \
+  --asp     example \
+  --otp     <span class="c-str">123456</span> \
+  --relay   https://relay.opennhp.org/relay
+
+<span class="c-comment"># On success the server responds with NHP-RAK:
+# { "errCode": "0", "aspId": "example", "expiresAt": 1234567890 }</span></pre>
+      <p class="api-note">The CLI tool ships with OpenNHP (<code>nhp-agentd</code>). For Go applications use the <code>endpoints/agent</code> package directly; for other languages implement the Noise handshake and wrap the JSON payload per the NHP-OTP / NHP-REG message spec.</p>
+    </div>
   </div>
 </aside>
 </div>
@@ -472,6 +540,15 @@
 <script type="module">
 import { NHPAgent } from '@opennhp/agent';
 import { encode as cborEncode } from 'cbor-x';
+
+// ── Tab switcher (API examples panel) ──
+window.switchTab = (evt, panelId) => {
+  const container = evt.target.closest('.api-examples');
+  container.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  container.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  evt.target.classList.add('active');
+  container.querySelector('#' + panelId).classList.add('active');
+};
 
 // ── State ──
 let agent = null;

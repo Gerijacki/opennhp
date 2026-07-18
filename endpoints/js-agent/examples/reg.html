@@ -523,6 +523,7 @@ nhp-agentd register \
 
 <p class="footer page-footer">
   OpenNHP Agent SDK v<span id="sdk-version">—</span> &middot;
+  <a href="https://agent.opennhp.org/" target="_blank" rel="noopener">agent demo &rarr;</a> &middot;
   <a href="https://opennhp.org" target="_blank" rel="noopener">opennhp.org</a>
 </p>
 
@@ -772,8 +773,10 @@ window.doRegister = async () => {
           <button class="btn btn-primary" onclick="goKnock()">Knock with this key &rarr;</button>
         </div>
         <p style="font-size:12px;color:#8b949e;margin-top:12px">
-          Click <strong>Knock</strong> to open the demo page with your registered key pre-filled,
-          or paste the <strong>CBOR Token</strong> into the demo page's "Load from Token" dialog
+          Click <strong>Knock with this key</strong> to open the
+          <a href="https://agent.opennhp.org/" target="_blank" rel="noopener" style="color:#58a6ff;text-decoration:none">agent demo (agent.opennhp.org)</a>
+          with your registered key pre-filled and access the protected resource,
+          or paste the <strong>CBOR Token</strong> into that page's "Load from Token" dialog
           (CBOR has the same fields as the JSON download, encoded compactly).
         </p>
       `;

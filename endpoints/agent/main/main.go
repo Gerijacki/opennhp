@@ -399,11 +399,11 @@ func runRegisterApp(email, aspId, resId, serverCluster, deviceId, orgId, otpCode
 		email = val
 	}
 
-	// Step 0: generate a fresh key pair — let the user choose the cipher scheme.
+	// Step 0: generate a fresh key pair — let the user choose the cipher
+	// scheme. Labels match the reg.opennhp.org registration page.
 	fmt.Printf("\n  %sCipher scheme:%s\n", colorBold, colorReset)
-	fmt.Printf("    %s[1]%s SM2   (GMSM / Chinese national standard) %s← recommended for this server%s\n",
-		colorCyan, colorReset, colorDim, colorReset)
-	fmt.Printf("    %s[2]%s Curve25519 (standard)\n", colorCyan, colorReset)
+	fmt.Printf("    %s[1]%s Curve25519 (X25519 + AES-256-GCM + BLAKE2s)\n", colorCyan, colorReset)
+	fmt.Printf("    %s[2]%s GMSM / SM2 (SM2 + SM4-GCM + SM3)\n", colorCyan, colorReset)
 	schemeInput, _ := promptInput(reader, "Choose cipher scheme", "1")
 	schemeInput = strings.TrimSpace(schemeInput)
 
@@ -411,13 +411,13 @@ func runRegisterApp(email, aspId, resId, serverCluster, deviceId, orgId, otpCode
 	var cipherScheme int
 	switch schemeInput {
 	case "2":
+		eccType = core.ECC_SM2
+		cipherScheme = common.CIPHER_SCHEME_GMSM
+		fmt.Printf("  %s✔  GMSM / SM2 selected%s\n\n", colorGreen, colorReset)
+	default:
 		eccType = core.ECC_CURVE25519
 		cipherScheme = common.CIPHER_SCHEME_CURVE
 		fmt.Printf("  %s✔  Curve25519 selected%s\n\n", colorGreen, colorReset)
-	default:
-		eccType = core.ECC_SM2
-		cipherScheme = common.CIPHER_SCHEME_GMSM
-		fmt.Printf("  %s✔  SM2 selected%s\n\n", colorGreen, colorReset)
 	}
 
 	ecdh := core.NewECDH(eccType)
@@ -646,7 +646,7 @@ func runRegisterApp(email, aspId, resId, serverCluster, deviceId, orgId, otpCode
 	}
 	fmt.Printf("  %sCipher scheme:%s    %s\n", colorYellow, colorReset, func() string {
 		if cipherScheme == common.CIPHER_SCHEME_GMSM {
-			return "SM2 (GMSM)"
+			return "GMSM / SM2"
 		}
 		return "Curve25519"
 	}())

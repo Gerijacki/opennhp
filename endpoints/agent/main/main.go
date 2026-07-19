@@ -659,26 +659,67 @@ func runRegisterApp(email, aspId, resId, serverCluster, deviceId, orgId, otpCode
 	}
 	fmt.Println()
 
-	// Offer to write config.toml + resource.toml.
-	fmt.Printf("  %sWrite config.toml and resource.toml with these settings? [Y/n]:%s ", colorBold, colorReset)
+	// Offer to write config.toml + resource.toml. These writers emit a
+	// minimal template, so overwriting an already-configured agent would
+	// discard fields the register flow doesn't know about (UserData,
+	// TEEPrivateKeyBase64, custom LogLevel, and every additional
+	// [[Resources]] entry). Detect existing files: warn, list what would
+	// be overwritten, and DEFAULT THE PROMPT TO NO so pressing Enter does
+	// not silently destroy config. Existing files are backed up to
+	// <name>.bak before being replaced.
+	cfgPath := filepath.Join(exeDirPath, "etc", "config.toml")
+	resPath := filepath.Join(exeDirPath, "etc", "resource.toml")
+	var existing []string
+	if _, err := os.Stat(cfgPath); err == nil {
+		existing = append(existing, "config.toml")
+	}
+	if _, err := os.Stat(resPath); err == nil {
+		existing = append(existing, "resource.toml")
+	}
+
+	defaultYes := len(existing) == 0
+	if defaultYes {
+		fmt.Printf("  %sWrite config.toml and resource.toml with these settings? [Y/n]:%s ", colorBold, colorReset)
+	} else {
+		fmt.Printf("  %s⚠  Existing %s found — overwriting keeps only the fields shown above%s\n",
+			colorYellow, strings.Join(existing, " and "), colorReset)
+		fmt.Printf("  %s(a .bak copy is kept). Overwrite? [y/N]:%s ", colorDim, colorReset)
+	}
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(strings.ToLower(choice))
-	if choice == "" || choice == "y" || choice == "yes" {
+
+	confirmed := (choice == "y" || choice == "yes") || (defaultYes && choice == "")
+	if confirmed {
 		if err := writeRegistrationConfig(exeDirPath, privKey, email, orgId, cipherScheme); err != nil {
 			fmt.Printf("  %s⚠  Failed to write config.toml:%s %v\n\n", colorYellow, colorReset, err)
 		} else {
-			fmt.Printf("  %s✔  config.toml written to:%s %s\n\n", colorGreen, colorReset,
-				filepath.Join(exeDirPath, "etc", "config.toml"))
+			fmt.Printf("  %s✔  config.toml written to:%s %s\n\n", colorGreen, colorReset, cfgPath)
 		}
 		if err := writeResourceConfig(exeDirPath, aspId, resId, serverCluster); err != nil {
 			fmt.Printf("  %s⚠  Failed to write resource.toml:%s %v\n\n", colorYellow, colorReset, err)
 		} else {
-			fmt.Printf("  %s✔  resource.toml written to:%s %s\n\n", colorGreen, colorReset,
-				filepath.Join(exeDirPath, "etc", "resource.toml"))
+			fmt.Printf("  %s✔  resource.toml written to:%s %s\n\n", colorGreen, colorReset, resPath)
 		}
+	} else if len(existing) > 0 {
+		fmt.Printf("  %sKept existing config unchanged. Your new private key and public key are shown above.%s\n\n",
+			colorDim, colorReset)
 	}
 
 	return nil
+}
+
+// backupIfExists copies path to path+".bak" when path already exists, so a
+// subsequent truncating write does not irreversibly destroy the operator's
+// prior config. A failure to back up aborts the write (returned error).
+func backupIfExists(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return os.WriteFile(path+".bak", data, 0o600)
 }
 
 // writeResourceConfig writes a minimal resource.toml binding the registered asp-id/res-id to a cluster.
@@ -697,6 +738,9 @@ ResourceId    = %q
 Cluster       = %q
 `, aspId, resId, cluster)
 
+	if err := backupIfExists(resPath); err != nil {
+		return err
+	}
 	return os.WriteFile(resPath, []byte(content), 0o600)
 }
 
@@ -717,5 +761,8 @@ OrganizationId = %q
 LogLevel = 2
 `, privKey, cipherScheme, userId, orgId)
 
+	if err := backupIfExists(cfgPath); err != nil {
+		return err
+	}
 	return os.WriteFile(cfgPath, []byte(content), 0o600)
 }

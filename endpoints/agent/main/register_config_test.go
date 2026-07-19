@@ -67,3 +67,49 @@ func TestWriteRegistrationConfig_CurveScheme(t *testing.T) {
 		t.Fatalf("expected DefaultCipherScheme = 0 for curve25519, got:\n%s", data)
 	}
 }
+
+// TestWriteConfig_BacksUpExisting verifies an existing config.toml is
+// preserved as config.toml.bak before being overwritten, so a re-run of
+// `register` never irreversibly destroys prior config.
+func TestWriteConfig_BacksUpExisting(t *testing.T) {
+	dir := t.TempDir()
+	etc := filepath.Join(dir, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := "# hand-written config\nUserId = \"pre-existing\"\nLogLevel = 4\n"
+	if err := os.WriteFile(filepath.Join(etc, "config.toml"), []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeRegistrationConfig(dir, "NEWKEY", "new@user", "", 1); err != nil {
+		t.Fatalf("writeRegistrationConfig: %v", err)
+	}
+
+	// New content is written...
+	newData, _ := os.ReadFile(filepath.Join(etc, "config.toml"))
+	if !strings.Contains(string(newData), "NEWKEY") {
+		t.Fatalf("config.toml was not overwritten with new content:\n%s", newData)
+	}
+	// ...and the original is preserved in .bak.
+	bak, err := os.ReadFile(filepath.Join(etc, "config.toml.bak"))
+	if err != nil {
+		t.Fatalf("expected config.toml.bak to exist: %v", err)
+	}
+	if string(bak) != original {
+		t.Fatalf("config.toml.bak does not match the original:\ngot:  %s\nwant: %s", bak, original)
+	}
+}
+
+// TestBackupIfExists_NoFileNoError: backing up a non-existent file is a
+// no-op (no error, no .bak created).
+func TestBackupIfExists_NoFileNoError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "missing.toml")
+	if err := backupIfExists(path); err != nil {
+		t.Fatalf("backupIfExists on missing file should be nil, got %v", err)
+	}
+	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
+		t.Fatalf("no .bak should be created for a missing source file")
+	}
+}

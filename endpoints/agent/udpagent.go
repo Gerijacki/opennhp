@@ -138,9 +138,13 @@ func (kt *KnockTarget) GetServerPeer() *core.UdpPeer {
 	return kt.ServerPeer
 }
 
-// GetServerPeerForScheme returns the server peer whose public key
-// matches the given cipher scheme. Falls back to ServerPeer when the
-// cluster has no separate Curve25519 peer configured.
+// GetServerPeerForScheme returns the cluster's representative peer (via
+// ServerCluster.PeerForCipherScheme), or the legacy ServerPeer when no
+// cluster is bound. The cipherScheme argument is currently advisory: the
+// cluster exposes a single peer whose PubKeyBase64 already matches its
+// DefaultCipherScheme, so there is no per-scheme selection yet. The
+// parameter is kept so a future per-scheme peer table can be threaded
+// through without touching call sites.
 func (kt *KnockTarget) GetServerPeerForScheme(cipherScheme int) *core.UdpPeer {
 	kt.Lock()
 	defer kt.Unlock()
@@ -557,6 +561,14 @@ func (a *UdpAgent) ReinitWithKey(privKeyBytes []byte, cipherScheme int) error {
 	// (about-to-be-closed) DecryptedMsgQueue and nothing drains the new
 	// device's queue — cookie challenges and generic replies would be
 	// silently dropped after a reinit.
+	//
+	// Scope note: deviceMutex only synchronizes this swap window and the
+	// receive routine's channel capture. The send/knock/request paths and
+	// packetReceiveRoutine read a.device WITHOUT the lock. That is safe for
+	// the current one-shot register flow — ReinitWithKey runs right after
+	// Start() while senders are idle, and a.device is never rewritten
+	// afterward. If ReinitWithKey is ever called with active traffic, those
+	// readers must also take deviceMutex.
 	a.deviceMutex.Lock()
 	oldDev := a.device
 	a.device = newDev

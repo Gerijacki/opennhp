@@ -141,9 +141,15 @@ generate_keys() {
 
 # generate_server_keys: uses --both to derive SM2 and Curve25519 public keys
 # from a single SM2 private key. Returns priv|curve25519_pub|sm2_pub.
-# When reusing, existing_sm2_pub may be empty for legacy secrets that only
-# stored one public key; in that case we fall through to regeneration so that
-# the SM2 public key gets populated.
+#
+# Legacy secrets (created before dual-cipher support) store the private key
+# and one public key but NOT the SM2 public key. The private key is
+# scheme-agnostic — the same 32 bytes yield both an SM2 and a Curve25519
+# public key — so when only the SM2 public key is missing we DERIVE it from
+# the existing private key with `pubkey --both` rather than regenerating.
+# Regenerating would mint a brand-new private key and silently rotate the
+# server identity (breaking every pinned peer), which must only happen on an
+# explicit --regenerate.
 generate_server_keys() {
   local binary="$1"
   local name="$2"
@@ -155,6 +161,26 @@ generate_server_keys() {
     echo "  Reusing existing $name keys from AWS SM" >&2
     echo "$existing_priv|$existing_curve_pub|$existing_sm2_pub"
     return
+  fi
+
+  # Backfill path: private key present but SM2 (and/or Curve25519) public key
+  # missing. Derive the public keys from the STABLE existing private key.
+  if [[ "$REGENERATE" == "false" && -n "$existing_priv" ]]; then
+    echo "  Backfilling $name public keys from existing private key (no rotation)..." >&2
+    local pub_raw pub_json curve_pub sm2_pub
+    pub_raw=$("$binary" pubkey --both --json "$existing_priv")
+    pub_json=$(echo "$pub_raw" | grep -E '^\{.*"sm2PublicKey".*\}$' | tail -1)
+    if [ -n "$pub_json" ]; then
+      curve_pub=$(echo "$pub_json" | jq -r '.curve25519PublicKey')
+      sm2_pub=$(echo "$pub_json" | jq -r '.sm2PublicKey')
+      if [[ -n "$curve_pub" && "$curve_pub" != "null" && -n "$sm2_pub" && "$sm2_pub" != "null" ]]; then
+        echo "$existing_priv|$curve_pub|$sm2_pub"
+        return
+      fi
+    fi
+    echo "  WARNING: could not derive $name public keys from existing private key; raw output was:" >&2
+    echo "$pub_raw" >&2
+    echo "  Falling back to key generation (this ROTATES the $name private key)." >&2
   fi
 
   echo "  Generating new $name keys (--both)..." >&2

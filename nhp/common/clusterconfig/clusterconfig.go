@@ -52,12 +52,12 @@ const NameMaxLen = 64
 // package doc for the two accepted forms.
 type ClusterConfig struct {
 	// Cluster-level fields.
-	Name                   string             `toml:"Name"`
-	PubKeyBase64           string             `toml:"PubKeyBase64"`           // server public key matching the agent's DefaultCipherScheme (SM2 64-byte or Curve25519 32-byte)
-	LoadBalance            loadbalance.Scheme `toml:"LoadBalance"`
-	StickyInstance         *bool              `toml:"StickyInstance"`
-	ExpireTime             int64              `toml:"ExpireTime"`
-	Instances              []InstanceConfig   `toml:"Instances"`
+	Name           string             `toml:"Name"`
+	PubKeyBase64   string             `toml:"PubKeyBase64"` // server public key matching the agent's DefaultCipherScheme (SM2 64-byte or Curve25519 32-byte)
+	LoadBalance    loadbalance.Scheme `toml:"LoadBalance"`
+	StickyInstance *bool              `toml:"StickyInstance"`
+	ExpireTime     int64              `toml:"ExpireTime"`
+	Instances      []InstanceConfig   `toml:"Instances"`
 
 	// Legacy top-level fields (single-server form). Carry the same
 	// names the original schema used so existing server.toml files

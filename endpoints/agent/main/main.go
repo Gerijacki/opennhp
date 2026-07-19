@@ -424,13 +424,20 @@ func runRegisterApp(email, aspId, resId, serverCluster, deviceId, orgId, otpCode
 	privKeyBytes := ecdh.PrivateKey()
 	fmt.Printf("  %sGenerated key pair:%s\n", colorYellow, colorReset)
 	fmt.Printf("    Private key:       %s%s%s\n", colorDim, ecdh.PrivateKeyBase64(), colorReset)
-	if cipherScheme == common.CIPHER_SCHEME_GMSM {
-		fmt.Printf("    SM2 public key:    %s\n", ecdh.PublicKeyBase64())
-		curvePub := core.ECDHFromKey(core.ECC_CURVE25519, privKeyBytes).PublicKeyBase64()
-		fmt.Printf("    Curve25519 pubkey: %s\n", curvePub)
-	} else {
-		fmt.Printf("    Curve25519 pubkey: %s\n", ecdh.PublicKeyBase64())
+	// The private key is scheme-agnostic: the same bytes derive both an SM2
+	// and a Curve25519 public key. Show both regardless of the selected
+	// scheme (the one matching the selection is registered), so it's clear
+	// one key can serve either cipher. Mark the active one.
+	sm2Pub := core.ECDHFromKey(core.ECC_SM2, privKeyBytes).PublicKeyBase64()
+	curvePub := core.ECDHFromKey(core.ECC_CURVE25519, privKeyBytes).PublicKeyBase64()
+	activeMark := func(gmsm bool) string {
+		if (cipherScheme == common.CIPHER_SCHEME_GMSM) == gmsm {
+			return colorGreen + "  ← selected" + colorReset
+		}
+		return ""
 	}
+	fmt.Printf("    Curve25519 pubkey: %s%s\n", curvePub, activeMark(false))
+	fmt.Printf("    SM2 public key:    %s%s\n", sm2Pub, activeMark(true))
 	fmt.Println()
 
 	// Start agent with the existing config (for peer/resource resolution), then

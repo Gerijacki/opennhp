@@ -269,6 +269,15 @@ type UdpAgent struct {
 	config *Config
 	log    *log.Logger
 
+	// allowMissingConfig, when true, lets Start proceed even if
+	// etc/config.toml is absent — it uses an empty config and mints a
+	// throwaway key that the caller replaces via ReinitWithKey. This is
+	// scoped to the interactive `register` flow (which bootstraps an agent
+	// before any config exists). It stays false for `run`/`dhp`, so those
+	// commands still fail loudly on a genuinely missing config rather than
+	// silently starting with a random key and empty identity.
+	allowMissingConfig bool
+
 	remoteConnectionMutex sync.Mutex
 	remoteConnectionMap   map[string]*UdpConn // indexed by remote UDP address
 
@@ -366,8 +375,15 @@ func (a *UdpAgent) Start(dirPath string, logLevel int) (err error) {
 
 	var prk []byte
 	if a.config.PrivateKeyBase64 == "" {
-		// No config.toml yet (e.g. first-time registration); use a throwaway key.
-		// ReinitWithKey will replace it with the real key immediately after Start returns.
+		// An empty private key is only acceptable in the register bootstrap
+		// flow (allowMissingConfig): use a throwaway key that ReinitWithKey
+		// replaces immediately after Start returns. For run/dhp this is a
+		// real misconfiguration — fail loudly instead of silently starting
+		// with a random key and empty identity.
+		if !a.allowMissingConfig {
+			log.Error("no private key configured in etc/config.toml")
+			return fmt.Errorf("no private key configured; check etc/config.toml")
+		}
 		prk = core.NewECDH(core.ECC_CURVE25519).PrivateKey()
 	} else {
 		prk, err = base64.StdEncoding.DecodeString(a.config.PrivateKeyBase64)
@@ -487,6 +503,13 @@ func (a *UdpAgent) SetKnockUser(usrId string, orgId string, userData map[string]
 	a.knockUser.OrganizationId = orgId
 	a.knockUser.UserData = userData
 	a.knockUserMutex.Unlock()
+}
+
+// SetAllowMissingConfig opts the agent into tolerating a missing
+// etc/config.toml at Start (empty config + throwaway key). Call it before
+// Start. Intended only for the interactive `register` bootstrap flow.
+func (a *UdpAgent) SetAllowMissingConfig(allow bool) {
+	a.allowMissingConfig = allow
 }
 
 func (a *UdpAgent) SetDeviceId(devId string) {

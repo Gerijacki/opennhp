@@ -193,6 +193,7 @@ func main() {
 
 	if err := app.Run(os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 }
 
@@ -443,6 +444,11 @@ func runRegisterApp(email, aspId, resId, serverCluster, deviceId, orgId, otpCode
 	// Start agent with the existing config (for peer/resource resolution), then
 	// immediately replace its device with the freshly generated key pair.
 	a := &agent.UdpAgent{}
+	// register bootstraps an agent before any config.toml exists, so allow a
+	// missing base config (empty config + throwaway key, replaced below via
+	// ReinitWithKey). run/dhp leave this false and fail loudly on a missing
+	// config.
+	a.SetAllowMissingConfig(true)
 	if err = a.Start(exeDirPath, 2); err != nil {
 		fmt.Printf("\n  %s❌ Failed to start agent:%s %v\n\n", colorYellow, colorReset, err)
 		return err
@@ -639,7 +645,13 @@ func runRegisterApp(email, aspId, resId, serverCluster, deviceId, orgId, otpCode
 		}
 		fmt.Printf("  %sError:%s        %s\n", colorYellow, colorReset, errMsgStr)
 		fmt.Println()
-		os.Exit(1)
+		// Return the error instead of os.Exit so the deferred a.Stop()
+		// (and any other cleanup) still runs. main() maps a non-nil error
+		// to a non-zero exit code.
+		if errMsgStr != "" {
+			return fmt.Errorf("registration failed: %s", errMsgStr)
+		}
+		return fmt.Errorf("registration failed")
 	}
 
 	// Registration succeeded — print results.

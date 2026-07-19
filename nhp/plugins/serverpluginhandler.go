@@ -194,7 +194,7 @@ type PluginOTPValidateFunc func(userId, deviceId, otpCode, pubKey string) error
 // 1 = GMSM/SM2) the registered key belongs to. Out-of-tree plugins that
 // call helper.RegisterKeyFunc(userId, deviceId, pubKey) MUST update their
 // call site to pass the scheme, e.g.
-// helper.RegisterKeyFunc(userId, deviceId, pubKey, req.Msg.CipherScheme).
+// helper.RegisterKeyFunc(userId, deviceId, pubKey, req.CipherScheme).
 type PluginRegisterKeyFunc func(userId, deviceId, pubKeyBase64 string, cipherScheme int) error
 type PluginIsRegisteredFunc func(userId, deviceId string) (bool, error)
 

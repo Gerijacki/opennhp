@@ -524,8 +524,13 @@ func runRegisterApp(email, aspId, resId, serverCluster, deviceId, orgId, otpCode
 
 	fmt.Println()
 
-	// Apply collected identity overrides to the running agent before sending.
-	a.SetKnockUser(email, orgId, nil)
+	// Apply collected identity overrides to the running agent before
+	// sending. Carry the email in UserData under the "email" key — the ASP
+	// plugin reads UserData["email"] as the OTP recipient (same as the
+	// js-agent web flow). Without it the plugin falls back to UserId, which
+	// works only when UserId happens to be a deliverable address; passing
+	// it explicitly matches reg.opennhp.org and avoids the fallback path.
+	a.SetKnockUser(email, orgId, map[string]any{"email": email})
 	if deviceId != "" {
 		a.SetDeviceId(deviceId)
 	}

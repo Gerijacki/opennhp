@@ -146,7 +146,14 @@ func (a *UdpAgent) updateBaseConfig(file string) (err error) {
 
 	content, err := os.ReadFile(file)
 	if err != nil {
-		log.Error("failed to read base config: %v", err)
+		if os.IsNotExist(err) && a.allowMissingConfig {
+			// config.toml not yet created (first-time `register` bootstrap);
+			// tolerate it and use an empty config. For run/dhp this branch is
+			// not taken, so a missing config surfaces as an error below.
+			err = nil
+		} else {
+			log.Error("failed to read base config: %v", err)
+		}
 	}
 
 	var conf Config

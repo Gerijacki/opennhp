@@ -1409,8 +1409,8 @@ func (us *UdpServer) NewNhpServerHelper(ppd *core.PacketParserData) *plugins.Nhp
 			})
 		}
 		h.ValidateOTPFunc = us.keyStore.ValidateOTP
-		h.RegisterKeyFunc = func(userId, deviceId, pubKeyBase64 string) error {
-			return us.keyStore.RegisterAgentKey(userId, deviceId, pubKeyBase64, keyTTL)
+		h.RegisterKeyFunc = func(userId, deviceId, pubKeyBase64 string, cipherScheme int) error {
+			return us.keyStore.RegisterAgentKey(userId, deviceId, pubKeyBase64, cipherScheme, keyTTL)
 		}
 		h.IsRegisteredFunc = us.keyStore.IsAgentRegistered
 		h.GetAgentKeyExpiryFunc = us.keyStore.GetAgentKeyExpiry

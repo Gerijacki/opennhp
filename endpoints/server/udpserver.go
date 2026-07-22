@@ -293,9 +293,9 @@ func (s *UdpServer) Start(dirPath string, logLevel int) (err error) {
 	}
 	if len(cookieKey) == 0 {
 		cookieKey = make([]byte, 32)
-		if _, err := rand.Read(cookieKey); err != nil {
-			log.Critical("failed to generate random cookie signing key: %v", err)
-			return fmt.Errorf("failed to generate random cookie signing key: %v", err)
+		if _, readErr := rand.Read(cookieKey); readErr != nil {
+			log.Critical("failed to generate random cookie signing key: %v", readErr)
+			return fmt.Errorf("failed to generate random cookie signing key: %v", readErr)
 		}
 		log.Info("CookieSigningKeyBase64 not set; using a random per-process key (single-instance only — clusters must share an operator-supplied key)")
 	} else {

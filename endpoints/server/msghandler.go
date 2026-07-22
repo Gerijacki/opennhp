@@ -233,9 +233,10 @@ func (s *UdpServer) HandleRegisterRequest(ppd *core.PacketParserData) (err error
 		}
 
 		regReq := &common.NhpRegisterRequest{
-			Msg:       regMsg,
-			Ack:       rakMsg,
-			PublicKey: regMsg.PublicKey,
+			Msg:          regMsg,
+			Ack:          rakMsg,
+			PublicKey:    regMsg.PublicKey,
+			CipherScheme: ppd.CipherScheme,
 			SrcAddr: &common.NetAddress{
 				Ip:   ppd.ConnData.RemoteAddr.IP.String(),
 				Port: ppd.ConnData.RemoteAddr.Port,

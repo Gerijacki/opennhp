@@ -16,6 +16,7 @@ import (
 
 	"github.com/OpenNHP/opennhp/endpoints/server"
 	"github.com/OpenNHP/opennhp/nhp/core"
+	"github.com/OpenNHP/opennhp/nhp/keystore"
 	"github.com/OpenNHP/opennhp/nhp/version"
 )
 
@@ -166,10 +167,70 @@ func main() {
 		},
 	}
 
+	// seal encrypts an existing base64 private key into a sealed blob for
+	// storing in config.toml in place of the plain key. The passphrase is
+	// taken from the environment (NHP_KEY_PASSPHRASE or
+	// NHP_KEY_PASSPHRASE_FILE) so it never appears on the command line.
+	sealCmd := &cli.Command{
+		Name:      "seal",
+		Usage:     "encrypt a base64 private key into a sealed blob for config.toml",
+		ArgsUsage: "<base64PrivateKey>",
+		Action: func(c *cli.Context) error {
+			priv := c.Args().First()
+			if priv == "" {
+				return fmt.Errorf("usage: seal <base64PrivateKey>")
+			}
+			raw, err := base64.StdEncoding.DecodeString(priv)
+			if err != nil {
+				return fmt.Errorf("decode private key: %w", err)
+			}
+			pass, err := keystore.PassphraseFromEnv()
+			if err != nil {
+				return err
+			}
+			if len(pass) == 0 {
+				return fmt.Errorf("no passphrase set: export %s or %s before sealing", keystore.EnvPassphrase, keystore.EnvPassphraseFile)
+			}
+			blob, err := keystore.Seal(raw, pass)
+			if err != nil {
+				return err
+			}
+			fmt.Println(blob)
+			return nil
+		},
+	}
+
+	// unseal decrypts a sealed blob back to a plain base64 private key
+	// (for debugging or key rotation). The passphrase comes from the
+	// environment, as with seal.
+	unsealCmd := &cli.Command{
+		Name:      "unseal",
+		Usage:     "decrypt a sealed key blob back to a base64 private key",
+		ArgsUsage: "<sealedBlob>",
+		Action: func(c *cli.Context) error {
+			blob := c.Args().First()
+			if blob == "" {
+				return fmt.Errorf("usage: unseal <sealedBlob>")
+			}
+			pass, err := keystore.PassphraseFromEnv()
+			if err != nil {
+				return err
+			}
+			raw, err := keystore.Open(blob, pass)
+			if err != nil {
+				return err
+			}
+			fmt.Println(base64.StdEncoding.EncodeToString(raw))
+			return nil
+		},
+	}
+
 	app.Commands = []*cli.Command{
 		runCmd,
 		keygenCmd,
 		pubkeyCmd,
+		sealCmd,
+		unsealCmd,
 	}
 
 	if err := app.Run(os.Args); err != nil {

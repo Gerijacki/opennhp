@@ -1,7 +1,12 @@
 # NHP-Server base config
 # field with (-) does not support dynamic update
 
-# PrivateKeyBase64 (-): server private key in base64 format.
+# PrivateKeyBase64 (-): server private key. Accepts either a plain base64
+#   key (default) or a sealed blob (starts with "v1$") produced by
+#   `nhp-serverd seal <base64Key>`. A sealed key is decrypted at startup
+#   with a passphrase read from the NHP_KEY_PASSPHRASE env var, or from the
+#   file pointed to by NHP_KEY_PASSPHRASE_FILE (recommended mode 0600).
+#   The passphrase is never stored in this file.
 # DefaultCipherScheme: 0: curve25519, 1: gmsm.
 # MIGRATION: Values changed in v2.x. If upgrading: old 0(gmsm)->new 1, old 1(curve)->new 0.
 # ListenIp (-): udp listening address.

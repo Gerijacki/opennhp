@@ -15,6 +15,7 @@ import (
 	"github.com/urfave/cli/v2"
 
 	"github.com/OpenNHP/opennhp/endpoints/server"
+	"github.com/OpenNHP/opennhp/nhp/audit"
 	"github.com/OpenNHP/opennhp/nhp/core"
 	"github.com/OpenNHP/opennhp/nhp/version"
 )
@@ -166,15 +167,74 @@ func main() {
 		},
 	}
 
+	// audit verifies the integrity of a security audit ledger produced by
+	// the server's tamper-evident audit log. It walks the hash chain and
+	// reports the first break, if any.
+	auditCmd := &cli.Command{
+		Name:  "audit",
+		Usage: "tools for the tamper-evident security audit ledger",
+		Subcommands: []*cli.Command{
+			{
+				Name:      "verify",
+				Usage:     "verify the hash chain of an audit ledger file",
+				ArgsUsage: "<ledgerFile>",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "key", Usage: "base64 HMAC signing key, if the ledger was signed"},
+				},
+				Action: func(c *cli.Context) error {
+					path := c.Args().First()
+					if path == "" {
+						return fmt.Errorf("usage: audit verify <ledgerFile>")
+					}
+					var hmacKey []byte
+					if k := c.String("key"); k != "" {
+						decoded, err := base64.StdEncoding.DecodeString(k)
+						if err != nil {
+							return fmt.Errorf("decode --key: %w", err)
+						}
+						hmacKey = decoded
+					}
+					f, err := os.Open(filepath.Clean(path))
+					if err != nil {
+						return err
+					}
+					defer f.Close()
+
+					res := audit.VerifyChain(f, hmacKey)
+					if res.Err != nil {
+						fmt.Printf("FAILED: %v\n", res.Err)
+						fmt.Printf("%d entr%s verified before the break.\n", res.Count, plural(res.Count))
+						// Exit non-zero with a clean message rather than a
+						// panic stack trace — this is a verification tool and
+						// a failed check is an expected, reportable outcome.
+						f.Close()
+						os.Exit(1)
+					}
+					fmt.Printf("OK: %d entr%s, hash chain intact.\n", res.Count, plural(res.Count))
+					return nil
+				},
+			},
+		},
+	}
+
 	app.Commands = []*cli.Command{
 		runCmd,
 		keygenCmd,
 		pubkeyCmd,
+		auditCmd,
 	}
 
 	if err := app.Run(os.Args); err != nil {
 		panic(err)
 	}
+}
+
+// plural returns the English plural suffix for "entry"/"entries" counts.
+func plural(n uint64) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 func printBanner() {

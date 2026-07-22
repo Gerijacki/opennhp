@@ -168,6 +168,32 @@ type Config struct {
 	// validation will reject the key and knocks will fail as if the
 	// agent were never registered. Default 86400 (24h) if unset / zero.
 	AgentKeyTTLSeconds int `json:"agentKeyTTLSeconds"`
+
+	// Audit configures the tamper-evident security audit ledger. Disabled
+	// by default; see AuditConfig.
+	Audit AuditConfig `json:"audit"`
+}
+
+// AuditConfig controls the hash-chained security audit ledger. When
+// enabled, security-relevant decisions (knock accepted/denied, OTP
+// validated/failed, agent registered) are appended as JSON lines linked
+// into a hash chain that makes after-the-fact tampering detectable. It is
+// separate from — and complementary to — the free-text [Audit] log stream.
+type AuditConfig struct {
+	// Enabled turns the ledger on. Off by default.
+	Enabled bool `json:"enabled"`
+	// FilePath is where the ledger is written. Relative paths resolve
+	// against <exe_dir>. Defaults to "<exe_dir>/logs/audit-ledger.jsonl".
+	FilePath string `json:"filePath"`
+	// Fsync flushes each entry to disk before returning. Audit logs are
+	// low-volume, so enabling this is usually worth the durability.
+	Fsync bool `json:"fsync"`
+	// SigningKeyBase64 is an optional base64 HMAC key. When set, each entry
+	// is additionally signed so the chain is bound to a secret the log file
+	// does not contain — an attacker who rewrites the whole file still
+	// cannot forge a chain that verifies. Without it, the hash chain alone
+	// still detects local edits, deletions and reordering.
+	SigningKeyBase64 string `json:"signingKey"`
 }
 
 type RemoteConfig struct {

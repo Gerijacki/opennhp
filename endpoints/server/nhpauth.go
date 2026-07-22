@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 
+	"github.com/OpenNHP/opennhp/nhp/audit"
 	"github.com/OpenNHP/opennhp/nhp/common"
 	"github.com/OpenNHP/opennhp/nhp/core"
 	"github.com/OpenNHP/opennhp/nhp/log"
@@ -110,6 +111,34 @@ func (s *UdpServer) HandleKnockRequest(ppd *core.PacketParserData) (err error) {
 
 		log.Info("server-agent(%s#%d@%s)[HandleKnockRequest] succeed: %+v", knkMsg.UserId, transactionId, addrStr)
 	}()
+
+	// Record the access decision in the tamper-evident audit ledger. Only
+	// the NHP knock path is a per-resource access decision; the DHP path
+	// (evidence appraisal) is audited elsewhere. The ledger nil-guards, so
+	// this whole block is skipped cheaply when auditing is off.
+	if s.auditLedger != nil && ppd.HeaderType != core.DHP_KNK {
+		granted := err == nil && ackMsg != nil && ackMsg.ErrCode == common.ErrSuccess.ErrorCode()
+		severity, result := audit.SeverityWarn, "denied"
+		if granted {
+			severity, result = audit.SeverityInfo, "granted"
+		}
+		fields := map[string]string{
+			"user":    knkMsg.UserId,
+			"src":     addrStr,
+			"aspId":   knkMsg.AuthServiceId,
+			"peerKey": shortKey(base64.StdEncoding.EncodeToString(ppd.RemotePubKey)),
+			"result":  result,
+		}
+		if !granted {
+			if ackMsg != nil {
+				fields["errCode"] = ackMsg.ErrCode
+			}
+			if err != nil {
+				fields["reason"] = err.Error()
+			}
+		}
+		s.auditEvent("knock", severity, fields)
+	}
 
 	// send back knock ack response
 	ackBytes, _ := json.Marshal(ackMsg)

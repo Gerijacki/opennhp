@@ -30,3 +30,20 @@ LogLevel = 4
 DisableAgentValidation = false
 AllowPrivateRelaySource = false
 ForceOverload = false
+
+# Tamper-evident security audit ledger (optional, disabled by default).
+# When Enabled, security decisions (knock granted/denied, OTP issued/failed,
+# agent registered) are appended as hash-chained JSON lines so any later
+# edit, deletion or reordering is detectable. Verify a ledger with:
+#   nhp-serverd audit verify <FilePath> [--key <SigningKey>]
+# FilePath: ledger path; relative paths resolve against the exe dir.
+#   Defaults to logs/audit-ledger.jsonl.
+# Fsync: flush each entry to disk (safer, negligible cost at audit volume).
+# SigningKeyBase64: optional base64 HMAC key binding the chain to a secret
+#   the log file does not contain. Generate one with:
+#   head -c 32 /dev/urandom | base64
+[Audit]
+Enabled = false
+FilePath = ""
+Fsync = true
+SigningKeyBase64 = ""

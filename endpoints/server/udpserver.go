@@ -14,6 +14,7 @@ import (
 
 	"github.com/OpenNHP/opennhp/nhp/etcd"
 
+	"github.com/OpenNHP/opennhp/nhp/audit"
 	"github.com/OpenNHP/opennhp/nhp/common"
 	"github.com/OpenNHP/opennhp/nhp/core"
 	"github.com/OpenNHP/opennhp/nhp/log"
@@ -124,6 +125,11 @@ type UdpServer struct {
 
 	// keyStore persists agent public keys and OTP records in SQLite.
 	keyStore *AgentKeyStore
+
+	// auditLedger is the tamper-evident security audit ledger. nil when
+	// auditing is disabled (the default); all emission goes through the
+	// nil-safe auditEvent helper so call sites need no guard.
+	auditLedger *audit.Ledger
 
 	//NHP-DB
 	dbPeerMapMutex sync.Mutex
@@ -374,6 +380,12 @@ func (s *UdpServer) Start(dirPath string, logLevel int) (err error) {
 	}
 	s.keyStore = ks
 
+	// Initialize the tamper-evident audit ledger if enabled.
+	if err := s.initAuditLedger(); err != nil {
+		log.Critical("failed to open audit ledger: %v", err)
+		return err
+	}
+
 	s.remoteConnectionMap = make(map[string]*UdpConn)
 	s.relayConnCount = make(map[string]int)
 	s.acConnectionMap = make(map[string]*ACConn)
@@ -480,6 +492,8 @@ func (s *UdpServer) Stop() {
 	if s.keyStore != nil {
 		s.keyStore.Close()
 	}
+
+	s.closeAuditLedger()
 
 	log.Info("==========================")
 	log.Info("=== NHP-Server stopped ===")

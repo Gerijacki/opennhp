@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/OpenNHP/opennhp/nhp/audit"
 	"github.com/OpenNHP/opennhp/nhp/common"
 	"github.com/OpenNHP/opennhp/nhp/core"
 	wasmEngine "github.com/OpenNHP/opennhp/nhp/core/wasm/engine"
@@ -197,10 +198,23 @@ func (s *UdpServer) HandleOTPRequest(ppd *core.PacketParserData) (err error) {
 	err = handler.RequestOTP(otpReq, s.NewNhpServerHelper(ppd))
 	if err != nil {
 		log.Error("server-agent(%s#%d@%s)[HandleOTPRequest] error: %v", otpMsg.UserId, transactionId, addrStr, err)
+		s.auditEvent("otp_request", audit.SeverityWarn, map[string]string{
+			"user":   otpMsg.UserId,
+			"src":    addrStr,
+			"aspId":  otpMsg.AuthServiceId,
+			"result": "failed",
+			"reason": err.Error(),
+		})
 		return err
 	}
 
 	log.Info("server-agent(%s#%d@%s)[HandleOTPRequest] succeeded", otpMsg.UserId, transactionId, addrStr)
+	s.auditEvent("otp_request", audit.SeverityInfo, map[string]string{
+		"user":   otpMsg.UserId,
+		"src":    addrStr,
+		"aspId":  otpMsg.AuthServiceId,
+		"result": "issued",
+	})
 	return nil
 }
 
@@ -269,6 +283,31 @@ func (s *UdpServer) HandleRegisterRequest(ppd *core.PacketParserData) (err error
 
 		log.Info("server-agent(%s#%d@%s)[HandleRegisterRequest] succeeded", regMsg.UserId, transactionId, addrStr)
 	}()
+
+	// Record the registration outcome in the audit ledger.
+	if s.auditLedger != nil {
+		granted := err == nil && rakMsg != nil && rakMsg.ErrCode == common.ErrSuccess.ErrorCode()
+		severity, result := audit.SeverityWarn, "denied"
+		if granted {
+			severity, result = audit.SeverityNotice, "registered"
+		}
+		fields := map[string]string{
+			"user":    regMsg.UserId,
+			"src":     addrStr,
+			"aspId":   regMsg.AuthServiceId,
+			"peerKey": shortKey(base64.StdEncoding.EncodeToString(ppd.RemotePubKey)),
+			"result":  result,
+		}
+		if !granted {
+			if rakMsg != nil {
+				fields["errCode"] = rakMsg.ErrCode
+			}
+			if err != nil {
+				fields["reason"] = err.Error()
+			}
+		}
+		s.auditEvent("agent_register", severity, fields)
+	}
 
 	// send NHP_RAK message
 	rakBytes, _ := json.Marshal(rakMsg)

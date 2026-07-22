@@ -92,10 +92,48 @@ if sudo test -f "$CERT_DIR/fullchain.pem"; then
     fi
 fi
 
+# Extract existing SANs early so they can be reused in both the
+# missing-SAN check and the D_ARGS construction below.
+EXISTING_SANS=""
+if sudo test -f "$CERT_DIR/fullchain.pem"; then
+    EXISTING_SANS=$(sudo openssl x509 -noout -ext subjectAltName -in "$CERT_DIR/fullchain.pem" 2>/dev/null | \
+        tr ',' '\n' | sed -n 's/^[[:space:]]*DNS://p' | sort -u)
+fi
+
+# Even when the cert exists and is not near expiry, check whether any
+# EXTRA_DOMAINS are missing from its SAN list.  If so, re-issue with
+# --expand so new vhosts (e.g. reg.opennhp.org) get covered.
+if [ "$NEED_ISSUE" = "0" ] && [ -n "$EXTRA_DOMAINS" ]; then
+    echo "[tls] existing cert SANs: $(echo "$EXISTING_SANS" | tr '\n' ' ')"
+    for d in $EXTRA_DOMAINS; do
+        if ! echo "$EXISTING_SANS" | grep -qxF "$d"; then
+            echo "[tls] SAN MISSING: $d — will re-issue with --expand"
+            NEED_ISSUE=1
+            break
+        else
+            echo "[tls] SAN present: $d"
+        fi
+    done
+    if [ "$NEED_ISSUE" = "0" ]; then
+        echo "[tls] all EXTRA_DOMAINS already in certificate, no action needed"
+    fi
+fi
+
 if [ "$NEED_ISSUE" = "1" ]; then
+    # Build domain arguments from primary + extra domains, then merge in
+    # every existing SAN so that certbot --expand sees the requested set
+    # as a superset of the current certificate's names.  Without this,
+    # certbot creates a new lineage (e.g. relay.opennhp.org-0001) instead
+    # of expanding the existing one, and nothing points at the new cert.
     D_ARGS="-d $PRIMARY_DOMAIN"
     for d in $EXTRA_DOMAINS; do
         D_ARGS="$D_ARGS -d $d"
+    done
+    for d in $EXISTING_SANS; do
+        # Wrap in spaces so the first -d also matches the " -d X " pattern.
+        if ! echo " $D_ARGS " | grep -qF " -d $d "; then
+            D_ARGS="$D_ARGS -d $d"
+        fi
     done
 
     # The dnf-installed certbot (v2.x) may have left a stale account record
@@ -125,13 +163,31 @@ if [ "$NEED_ISSUE" = "1" ]; then
         sudo rm -rf /etc/letsencrypt/accounts/*
     fi
 
-    echo "[tls] requesting certificate: $D_ARGS"
+    # If a stale -0001 lineage exists from a previous failed --expand run,
+    # delete it so certbot doesn't match against it instead of the real
+    # $PRIMARY_DOMAIN lineage.
+    if sudo test -f "/etc/letsencrypt/renewal/${PRIMARY_DOMAIN}-0001.conf"; then
+        echo "[tls] deleting stale -0001 lineage so $PRIMARY_DOMAIN can be expanded cleanly"
+        sudo "$CERTBOT_BIN" delete --non-interactive --cert-name "${PRIMARY_DOMAIN}-0001" || \
+            echo "[tls] warning: certbot delete -0001 failed; continuing"
+    fi
+
+    EXPAND_FLAG=""
+    RENEW_FLAG="--keep-until-expiring"
+    if sudo test -f "$CERT_DIR/fullchain.pem"; then
+        EXPAND_FLAG="--expand"
+        RENEW_FLAG="--force-renewal"
+        echo "[tls] existing cert found, using --expand --force-renewal to add new SANs"
+    fi
+    echo "[tls] requesting certificate: $D_ARGS $EXPAND_FLAG $RENEW_FLAG"
     sudo "$CERTBOT_BIN" certonly \
+        --cert-name "$PRIMARY_DOMAIN" \
         --non-interactive --agree-tos \
         --email "$ACME_EMAIL" \
         --dns-cloudflare --dns-cloudflare-credentials "$CF_INI" \
         --dns-cloudflare-propagation-seconds 30 \
-        --keep-until-expiring \
+        $RENEW_FLAG \
+        $EXPAND_FLAG \
         $D_ARGS
 fi
 
@@ -147,6 +203,14 @@ if [ -f /etc/nginx/nginx.conf ]; then
 fi
 
 sudo nginx -t
+
+# After certbot success, verify SANs include all expected domains.
+echo "[tls] --- certificate summary ---"
+sudo openssl x509 -noout -subject -issuer -dates -in "$CERT_DIR/fullchain.pem" 2>/dev/null || true
+echo "[tls] SANs after issuance:"
+sudo openssl x509 -noout -ext subjectAltName -in "$CERT_DIR/fullchain.pem" 2>/dev/null | tr ',' '\n' | sed 's/^/  [tls]   /' || true
+echo "[tls] --- end certificate summary ---"
+
 sudo systemctl enable nginx
 sudo systemctl reload nginx 2>/dev/null || sudo systemctl restart nginx
 

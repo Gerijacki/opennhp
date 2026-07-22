@@ -115,6 +115,9 @@ export enum PacketType {
   RNK = 8,  // Re-knock
   RLY = 9,  // Relay
   AOL = 10, // Agent Online
+  OTP = 12, // One-Time Password request
+  REG = 13, // Register public key
+  RAK = 14, // Register acknowledge
 }
 
 /** NHP protocol version */
@@ -228,4 +231,125 @@ export interface AgentIdentity {
   deviceId: string;
   /** Organization ID (optional) */
   organizationId?: string;
+}
+
+/**
+ * WebAuthn credential committed at OTP-request time.
+ * Binds the hardware-backed P-256 key to the pending registration so a
+ * stolen OTP cannot be replayed with a different key.
+ */
+export interface WebAuthnCredential {
+  /** base64url-encoded credential ID */
+  credId: string;
+  /** COSE-encoded P-256 public key, base64 */
+  pubKeyCOSE: string;
+}
+
+/**
+ * WebAuthn assertion produced by navigator.credentials.get().
+ * The server verifies the P-256/ES256 ECDSA signature over
+ * authenticatorData || SHA256(clientDataJSON).
+ */
+export interface WebAuthnAssertion {
+  /** base64url credential ID */
+  credId: string;
+  /** base64-encoded authenticator data */
+  authData: string;
+  /** base64-encoded client data JSON */
+  clientDataJSON: string;
+  /** base64 DER-encoded ECDSA signature */
+  sig: string;
+}
+
+/**
+ * Agent OTP Request Message - matches Go AgentOTPMsg
+ * Sent by agent to request a one-time password for registration.
+ */
+export interface AgentOTPMsg {
+  /** User ID */
+  usrId: string;
+  /** Device ID */
+  devId: string;
+  /** Organization ID (optional) */
+  orgId?: string;
+  /** Auth Service Provider ID */
+  aspId: string;
+  /** Agent NHP public key (base64) — bound to this OTP at issuance */
+  pubKey?: string;
+  /** WebAuthn credential — present when hardware-backed key mode is used */
+  webauthn?: WebAuthnCredential;
+  /** User data map (optional) — e.g. email address under "email" key */
+  usrData?: Record<string, unknown>;
+}
+
+/**
+ * Agent Register Message - matches Go AgentRegisterMsg
+ * Sent by agent to register its public key with the server.
+ */
+export interface AgentRegisterMsg {
+  /** User ID */
+  usrId: string;
+  /** Device ID */
+  devId: string;
+  /** Organization ID (optional) */
+  orgId?: string;
+  /** Auth Service Provider ID */
+  aspId: string;
+  /** One-time password — omitted when webauthn assertion is present */
+  otp?: string;
+  /** NHP public key to register (base64) */
+  pubKey?: string;
+  /** WebAuthn assertion proving possession of the hardware key */
+  webauthn?: WebAuthnAssertion;
+  /** User data map (optional) */
+  usrData?: Record<string, unknown>;
+}
+
+/**
+ * Server Register Acknowledge Message - matches Go ServerRegisterAckMsg
+ * Sent by server to confirm registration.
+ */
+export interface ServerRegisterAckMsg {
+  /** Error code ("0" means success) */
+  errCode: string;
+  /** Error message (if errCode is not "0") */
+  errMsg?: string;
+  /** Auth Service Provider ID */
+  aspId?: string;
+  /**
+   * Unix-seconds timestamp at which the registered public key becomes
+   * invalid. Omitted when the server is configured for non-expiring
+   * keys (agentKeyTTLSeconds=0) or when registration failed.
+   * The SDK converts this to milliseconds in RegisterResult.expiresAt.
+   */
+  expiresAt?: number;
+}
+
+/**
+ * Result of a registration OTP request.
+ */
+export interface OtpResult {
+  /** Whether the OTP request was sent successfully */
+  success: boolean;
+  /** Error message if request failed */
+  error?: string;
+}
+
+/**
+ * Result of a registration attempt.
+ */
+export interface RegisterResult {
+  /** Whether registration was successful */
+  success: boolean;
+  /** Error message if registration failed */
+  error?: string;
+  /** Error code if registration failed */
+  errorCode?: string;
+  /**
+   * Unix-milliseconds timestamp at which the registered public key
+   * expires. Populated only on success and only when the server
+   * returned one (non-expiring configurations omit it). Matches the
+   * unit of KnockResult.expiresAt / ServerConfig.expiresAt.
+   */
+  expiresAt?: number;
 }

@@ -34,6 +34,7 @@ type AgentOTPMsg struct {
 	OrganizationId string         `json:"orgId,omitempty"`
 	AuthServiceId  string         `json:"aspId"`
 	Passcode       string         `json:"pass,omitempty"`
+	PublicKey      string         `json:"pubKey,omitempty"`
 	UserData       map[string]any `json:"usrData,omitempty"`
 }
 
@@ -43,6 +44,7 @@ type AgentRegisterMsg struct {
 	OrganizationId string         `json:"orgId,omitempty"`
 	AuthServiceId  string         `json:"aspId"`
 	OTP            string         `json:"otp,omitempty"`
+	PublicKey      string         `json:"pubKey,omitempty"`
 	UserData       map[string]any `json:"usrData,omitempty"`
 }
 
@@ -50,6 +52,12 @@ type ServerRegisterAckMsg struct {
 	ErrCode       string `json:"errCode"`
 	ErrMsg        string `json:"errMsg,omitempty"`
 	AuthServiceId string `json:"aspId"`
+	// ExpiresAt is the unix-seconds timestamp at which the registered
+	// public key becomes invalid. Omitted when the server is configured
+	// for non-expiring keys (agentKeyTTLSeconds=0 in Go, or unset) or
+	// when registration failed (errCode != "0"). The SDK/reg page can
+	// convert this to a local time to display "Key valid until <date>".
+	ExpiresAt *int64 `json:"expiresAt,omitempty"`
 }
 
 type AgentKnockMsg struct {

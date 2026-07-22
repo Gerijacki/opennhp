@@ -128,6 +128,9 @@ type UdpServer struct {
 	// that can't acquire a slot are dropped (the agent will retry).
 	handlerSem chan struct{}
 
+	// keyStore persists agent public keys and OTP records in SQLite.
+	keyStore *AgentKeyStore
+
 	//NHP-DB
 	dbPeerMapMutex sync.Mutex
 	dbPeerMap      map[string]*core.UdpPeer // indexed by peer's public key base64 string
@@ -369,6 +372,14 @@ func (s *UdpServer) Start(dirPath string, logLevel int) (err error) {
 		_ = s.loadResources()
 	}
 
+	// Initialize agent key store (SQLite).
+	ks, err := NewAgentKeyStore(s.config.DatabasePath)
+	if err != nil {
+		log.Critical("failed to open agent key store: %v", err)
+		return err
+	}
+	s.keyStore = ks
+
 	s.remoteConnectionMap = make(map[string]*UdpConn)
 	s.relayConnCount = make(map[string]int)
 	s.acConnectionMap = make(map[string]*ACConn)
@@ -400,6 +411,22 @@ func (s *UdpServer) Start(dirPath string, logLevel int) (err error) {
 		}
 	}
 
+	// Register keystore-backed peer lookup fallback so dynamically
+	// registered agents (via NHP-REG) are accepted even though they
+	// are not in the static agent.toml peer pool.
+	if s.keyStore != nil {
+		opt := s.device.GetOption()
+		opt.PeerLookupFallback = func(pubKey []byte, headerType int) bool {
+			if headerType != core.NHP_KNK && headerType != core.NHP_RKN && headerType != core.NHP_EXT {
+				return false
+			}
+			pk := base64.StdEncoding.EncodeToString(pubKey)
+			found, _ := s.keyStore.FindAgentByPublicKey(pk)
+			return found
+		}
+		s.device.SetOption(opt)
+	}
+
 	// start device routines
 	s.device.Start()
 
@@ -410,6 +437,38 @@ func (s *UdpServer) Start(dirPath string, logLevel int) (err error) {
 	go s.recvPacketRoutine()
 	go s.sendMessageRoutine()
 	go s.recvMessageRoutine()
+
+	// Sweep expired registered-key rows on a 5-minute cadence. This is
+	// a housekeeping measure only — FindAgentByPublicKey already
+	// filters on expires_at, so an expired key is rejected on the next
+	// knock even without this goroutine.
+	if s.keyStore != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			t := time.NewTicker(5 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-s.signals.stop:
+					return
+				case <-t.C:
+					if n, err := s.keyStore.SweepExpiredDeactivates(); err != nil {
+						log.Warning("keystore: sweep failed: %v", err)
+					} else if n > 0 {
+						log.Info("keystore: swept %d expired agent key(s)", n)
+					}
+					// Also purge stale OTP rows (used or expired, older
+					// than 24h) so the table doesn't grow unbounded.
+					if n, err := s.keyStore.SweepStaleOTPs(86400); err != nil {
+						log.Warning("keystore: otp sweep failed: %v", err)
+					} else if n > 0 {
+						log.Info("keystore: swept %d stale otp record(s)", n)
+					}
+				}
+			}
+		}()
+	}
 
 	s.running.Store(true)
 	return nil
@@ -438,6 +497,10 @@ func (s *UdpServer) Stop() {
 	s.wg.Wait()
 	close(s.sendMsgCh)
 	s.ClosePlugins()
+
+	if s.keyStore != nil {
+		s.keyStore.Close()
+	}
 
 	log.Info("==========================")
 	log.Info("=== NHP-Server stopped ===")
@@ -923,6 +986,16 @@ func (s *UdpServer) dispatchHandler(ppd *core.PacketParserData, fn func(*core.Pa
 	}
 	go func(p *core.PacketParserData) {
 		defer func() { <-s.handlerSem }()
+		// Defense-in-depth: a panic in any message handler (e.g. a parsing
+		// bug on attacker-controlled bytes) must degrade to a dropped
+		// request, not tear down the whole server process.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Critical("handler panic recovered for %s from %s: %v",
+					core.HeaderTypeToString(p.HeaderType),
+					p.ConnData.RemoteAddr.String(), r)
+			}
+		}()
 		_ = fn(p)
 	}(ppd)
 }
@@ -1341,6 +1414,40 @@ func (us *UdpServer) NewNhpServerHelper(ppd *core.PacketParserData) *plugins.Nhp
 
 	h.AuthWithNhpCallbackFunc = func(req *common.NhpAuthRequest, res *common.ResourceData) (*common.ServerKnockAckMsg, error) {
 		return us.handleNhpOpenResource(req, res)
+	}
+
+	// Keystore-backed OTP and registration helpers.
+	if us.keyStore != nil {
+		otpTTL := int64(us.config.OTPTTLSeconds)
+		if otpTTL <= 0 {
+			otpTTL = 300 // 5 minutes default
+		}
+		h.OTPTTLSeconds = otpTTL
+
+		// Bind the configured registered-key TTL into RegisterKeyFunc so
+		// the plugin does not have to know about it. Zero in config
+		// means "unset"; fall back to the 24h default.
+		keyTTL := int64(us.config.AgentKeyTTLSeconds)
+		if keyTTL == 0 {
+			keyTTL = DefaultAgentKeyTTLSeconds
+		}
+		h.AgentKeyTTLSeconds = keyTTL
+
+		h.GenerateOTPFunc = func(userId, deviceId, pubKey string, ttlSeconds int64) (string, error) {
+			ttl := time.Duration(ttlSeconds) * time.Second
+			return us.keyStore.GenerateOTP(OTPParams{
+				UserId:    userId,
+				DeviceId:  deviceId,
+				PublicKey: pubKey,
+				TTL:       ttl,
+			})
+		}
+		h.ValidateOTPFunc = us.keyStore.ValidateOTP
+		h.RegisterKeyFunc = func(userId, deviceId, pubKeyBase64 string) error {
+			return us.keyStore.RegisterAgentKey(userId, deviceId, pubKeyBase64, keyTTL)
+		}
+		h.IsRegisteredFunc = us.keyStore.IsAgentRegistered
+		h.GetAgentKeyExpiryFunc = us.keyStore.GetAgentKeyExpiry
 	}
 
 	return h

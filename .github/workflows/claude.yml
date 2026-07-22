@@ -67,6 +67,12 @@ jobs:
       # Claude itself cannot call `gh pr comment` in this job's tool allow-list.
       issues: write
       actions: read
+    env:
+      # allowed_non_write_users='*' sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 inside
+      # the action, stripping GH_TOKEN from subprocesses and breaking gh commands.
+      # Override at job level (step-level env is not visible to action's inner env
+      # expressions). The tool allow-list and base-commit checkout bound blast radius.
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0"
     steps:
       # SECURITY: pull_request_target exposes repository secrets and a write token.
       # Pin the checkout to the BASE commit so untrusted PR-head code is never placed
@@ -82,12 +88,6 @@ jobs:
       - name: Run Claude Code Review
         id: claude_review
         uses: anthropics/claude-code-action@v1
-        env:
-          # allowed_non_write_users='*' enables CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1
-          # which strips GH_TOKEN from subprocesses, breaking all gh commands.
-          # Opt out of scrubbing; the tool allow-list and base-commit checkout
-          # already bound what Claude can do with the token.
-          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0"
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # GitHub auth: write reviews with GITHUB_TOKEN so GitHub's hard

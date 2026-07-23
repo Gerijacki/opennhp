@@ -57,8 +57,17 @@ func (c *Config) GetAgentEcdh() core.Ecdh {
 	// broken decode of the "v1$..." blob.
 	prk := c.resolvedPrivateKey
 	if prk == nil {
-		pass, _ := keystore.PassphraseFromEnv()
-		prk, _ = keystore.ResolvePrivateKey(c.PrivateKeyBase64, pass)
+		pass, passErr := keystore.PassphraseFromEnv()
+		if passErr == nil {
+			prk, passErr = keystore.ResolvePrivateKey(c.PrivateKeyBase64, pass)
+		}
+		// This path is normally unreachable — Start populates the cache
+		// before the HTTP service accepts requests — so a failure here
+		// means the key is sealed and the passphrase is missing/wrong.
+		// Log it instead of silently returning a wrong public key.
+		if passErr != nil {
+			log.Error("GetAgentEcdh: cannot resolve private key (sealed key without a valid passphrase?): %v", passErr)
+		}
 	}
 	return core.ECDHFromKey(eccType, prk)
 }

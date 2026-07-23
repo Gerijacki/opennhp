@@ -213,6 +213,10 @@ func PassphraseFromEnv() ([]byte, error) {
 	if path := os.Getenv(EnvPassphraseFile); path != "" {
 		data, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // G304: the passphrase file path is an operator-supplied config input by design
 		if err != nil {
+			// Fail closed: if the operator explicitly set the file var but
+			// the file can't be read, abort startup rather than silently
+			// falling through to a keyless/plain path. A misconfigured
+			// passphrase file should surface loudly, not be ignored.
 			return nil, fmt.Errorf("keystore: cannot read %s=%q: %w", EnvPassphraseFile, path, err)
 		}
 		return []byte(trimTrailingNewline(string(data))), nil

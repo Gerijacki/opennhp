@@ -1215,11 +1215,6 @@ func (s *UdpServer) FindAuthSvcProvider(aspId string) *common.AuthServiceProvide
 }
 
 func (s *UdpServer) processACOperation(knkMsg *common.AgentKnockMsg, conn *ACConn, srcAddr *common.NetAddress, dstAddrs []*common.NetAddress, openTime uint32) (artMsg *common.ACOpsResultMsg, err error) {
-	start := time.Now()
-	defer func() {
-		s.metrics.recordACOperation(err == nil, time.Since(start).Seconds())
-	}()
-
 	// should not happen
 	if knkMsg == nil || conn == nil {
 		log.Critical("processACOperation with nil input argument")
@@ -1280,6 +1275,15 @@ func (s *UdpServer) processACOperation(knkMsg *common.AgentKnockMsg, conn *ACCon
 		artMsg.ErrMsg = err.Error()
 		return
 	}
+
+	// Only now do we actually attempt the server→AC round trip, so arm the
+	// duration/outcome metric here — the early "should not happen" and
+	// not-running guards above returned without touching the AC and
+	// shouldn't show up as AC operations.
+	start := time.Now()
+	defer func() {
+		s.metrics.recordACOperation(err == nil, time.Since(start).Seconds())
+	}()
 
 	s.sendMsgCh <- aopMd
 

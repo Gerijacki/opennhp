@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/OpenNHP/opennhp/nhp/log"
-	"github.com/OpenNHP/opennhp/nhp/version"
 )
 
 const (
@@ -94,11 +93,14 @@ func (ms *metricsServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ms *metricsServer) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	// Deliberately minimal: status + uptime only. Version/commit are
+	// omitted so that if an operator ever binds this endpoint to a routable
+	// address, an unauthenticated probe can't fingerprint the exact build —
+	// this is a network-hiding product, and a liveness check doesn't need
+	// to leak that.
 	body := map[string]any{
 		"status":   "ok",
 		"uptime_s": int64(time.Since(ms.us.startTime).Seconds()),
-		"version":  version.Version,
-		"commit":   version.CommitId,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

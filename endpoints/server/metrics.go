@@ -46,7 +46,7 @@ func newServerMetrics(s *UdpServer, startTime time.Time) *serverMetrics {
 			return 0
 		})
 
-	return &serverMetrics{
+	sm := &serverMetrics{
 		registry: reg,
 		messagesReceived: reg.NewCounter("nhp_server_messages_received_total",
 			"Decrypted protocol messages received, by message type.", "type"),
@@ -59,6 +59,18 @@ func newServerMetrics(s *UdpServer, startTime time.Time) *serverMetrics {
 		blockedAddrs: reg.NewCounter("nhp_server_blocked_source_addresses_total",
 			"Source addresses blocked after exceeding the threat threshold.").With(),
 	}
+
+	// Pre-create the closed-set label series so they export an explicit 0
+	// from the first scrape, rather than appearing only after the first
+	// event — this keeps dashboards and rate() alerts from seeing a missing
+	// series (which reads as a gap, not a zero). Only the fully-enumerable
+	// label sets are seeded; message "type" is open-ended and left lazy.
+	sm.knockAuth.With("ok")
+	sm.knockAuth.With("denied")
+	sm.acOperations.With("ok")
+	sm.acOperations.With("error")
+
+	return sm
 }
 
 func (m *serverMetrics) recordMessageReceived(msgType string) {

@@ -83,6 +83,32 @@ func TestHealthzEndpoint(t *testing.T) {
 	if !strings.Contains(body, `"status":"ok"`) || !strings.Contains(body, `"uptime_s"`) {
 		t.Errorf("unexpected healthz body: %s", body)
 	}
+	// Version/commit must NOT be exposed on the liveness probe (fingerprinting).
+	if strings.Contains(body, `"version"`) || strings.Contains(body, `"commit"`) {
+		t.Errorf("healthz must not leak version/commit: %s", body)
+	}
+}
+
+// TestClosedSetSeriesPreInitializedToZero ensures the enumerable knock/AC
+// result series export an explicit 0 before any event, so dashboards see a
+// zero rather than a missing series.
+func TestClosedSetSeriesPreInitializedToZero(t *testing.T) {
+	s := newTestServerWithMetrics() // no record* calls
+	ms := &metricsServer{us: s}
+	rec := httptest.NewRecorder()
+	ms.handleMetrics(rec, httptest.NewRequest("GET", "/metrics", nil))
+
+	body := rec.Body.String()
+	for _, want := range []string{
+		`nhp_server_knock_auth_total{result="ok"} 0`,
+		`nhp_server_knock_auth_total{result="denied"} 0`,
+		`nhp_server_ac_operations_total{result="ok"} 0`,
+		`nhp_server_ac_operations_total{result="error"} 0`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected pre-initialized series %q\n---\n%s", want, body)
+		}
+	}
 }
 
 func TestServerMetricsNilSafe(t *testing.T) {

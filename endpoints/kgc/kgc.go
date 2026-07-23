@@ -224,8 +224,8 @@ func NewKGCImplFromConfig() (*KGCImpl, error) {
 	}
 
 	var config Config
-	if err := toml.Unmarshal(content, &config); err != nil {
-		return nil, err
+	if unmarshalErr := toml.Unmarshal(content, &config); unmarshalErr != nil {
+		return nil, unmarshalErr
 	}
 
 	if config.MasterPrivateKeyBase64 == "" || config.MasterPublicKeyBase64 == "" {

@@ -177,8 +177,8 @@ func TestRegisterAgentKey_SameKeyNoOpDoesNotResetClock(t *testing.T) {
 	time.Sleep(1100 * time.Millisecond)
 
 	// Re-register with the SAME key — should be a no-op.
-	if err := s.RegisterAgentKey("alice", "dev1", pkA, 0, 60); err != nil {
-		t.Fatalf("RegisterAgentKey (idempotent): %v", err)
+	if regErr := s.RegisterAgentKey("alice", "dev1", pkA, 0, 60); regErr != nil {
+		t.Fatalf("RegisterAgentKey (idempotent): %v", regErr)
 	}
 	_, secondExp, err := s.GetAgentKeyExpiry("alice", "dev1")
 	if err != nil || secondExp == nil {
@@ -300,8 +300,8 @@ func TestValidateOTP_AlreadyUsed(t *testing.T) {
 		t.Fatalf("GenerateOTP: %v", err)
 	}
 
-	if err := s.ValidateOTP("alice", "dev1", code, ""); err != nil {
-		t.Fatalf("first ValidateOTP: %v", err)
+	if valErr := s.ValidateOTP("alice", "dev1", code, ""); valErr != nil {
+		t.Fatalf("first ValidateOTP: %v", valErr)
 	}
 
 	// Second use must return ErrOTPAlreadyUsed.
@@ -480,8 +480,8 @@ func TestSweepStaleOTPs_DeletesUsedAndExpired(t *testing.T) {
 	}
 
 	// Use code1 (marks used=1).
-	if err := s.ValidateOTP("alice", "dev1", code1, ""); err != nil {
-		t.Fatalf("ValidateOTP code1: %v", err)
+	if valErr := s.ValidateOTP("alice", "dev1", code1, ""); valErr != nil {
+		t.Fatalf("ValidateOTP code1: %v", valErr)
 	}
 
 	// Wait for code2 to expire.

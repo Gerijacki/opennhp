@@ -11,6 +11,7 @@ import (
 
 	"github.com/OpenNHP/opennhp/nhp/common"
 	"github.com/OpenNHP/opennhp/nhp/core"
+	"github.com/OpenNHP/opennhp/nhp/keystore"
 	"github.com/OpenNHP/opennhp/nhp/log"
 	"github.com/OpenNHP/opennhp/nhp/utils"
 )
@@ -32,6 +33,13 @@ type Config struct {
 	PrivateKeyBase64    string `json:"privateKey"`
 	KnockUser           `mapstructure:",squash"`
 	*DHPConfig
+
+	// resolvedPrivateKey caches the raw private key after PrivateKeyBase64
+	// has been resolved once at startup (plain base64 or an unsealed blob).
+	// GetAgentEcdh reads it so it does not re-run the unseal KDF on every
+	// call and does not silently mis-handle a sealed key. Populated by the
+	// agent's Start (and refreshed by ReinitWithKey); never serialized.
+	resolvedPrivateKey []byte `json:"-"`
 }
 
 type DHPConfig struct {
@@ -43,8 +51,16 @@ func (c *Config) GetAgentEcdh() core.Ecdh {
 	if c.DefaultCipherScheme == common.CIPHER_SCHEME_CURVE {
 		eccType = core.ECC_CURVE25519
 	}
-	teePrk, _ := base64.StdEncoding.DecodeString(c.PrivateKeyBase64)
-	return core.ECDHFromKey(eccType, teePrk)
+	// Prefer the key resolved at startup. Fall back to resolving on demand
+	// (which correctly handles a sealed PrivateKeyBase64) so a caller that
+	// reaches this before Start still gets the right key rather than a
+	// broken decode of the "v1$..." blob.
+	prk := c.resolvedPrivateKey
+	if prk == nil {
+		pass, _ := keystore.PassphraseFromEnv()
+		prk, _ = keystore.ResolvePrivateKey(c.PrivateKeyBase64, pass)
+	}
+	return core.ECDHFromKey(eccType, prk)
 }
 
 func (c *Config) GetTeeEcdh() core.Ecdh {

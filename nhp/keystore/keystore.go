@@ -48,7 +48,19 @@ const (
 	argonThreads = 4
 	argonKeyLen  = 32 // AES-256
 
+	// Upper bounds on the KDF cost parsed out of a blob. The blob comes
+	// from operator-controlled config (an attacker who can edit it can
+	// swap the key outright), but a hostile or corrupt blob should still
+	// not be able to drive argon2 into an enormous allocation / CPU spin
+	// on startup. These ceilings are far above any sane real setting.
+	maxArgonTime   = 16
+	maxArgonMemory = 1 << 20 // KiB => 1 GiB
+
 	saltLen = 16
+
+	// gcmNonceSize is the standard AES-GCM nonce length. Declared here so a
+	// blob's nonce can be length-checked BEFORE the (expensive) KDF runs.
+	gcmNonceSize = 12
 
 	// EnvPassphrase and EnvPassphraseFile name the two ways an operator
 	// supplies the unseal passphrase without putting it in config.toml.
@@ -94,6 +106,7 @@ func Seal(privKeyRaw, passphrase []byte) (string, error) {
 	key := argon2.IDKey(passphrase, salt, argonTime, argonMemory, argonThreads, argonKeyLen)
 
 	aead, err := newAEAD(key)
+	zero(key) // the AES cipher has copied the key; drop our copy
 	if err != nil {
 		return "", err
 	}
@@ -131,7 +144,10 @@ func Open(blob string, passphrase []byte) ([]byte, error) {
 	t, err1 := strconv.Atoi(parts[2])
 	m, err2 := strconv.Atoi(parts[3])
 	p, err3 := strconv.Atoi(parts[4])
-	if err1 != nil || err2 != nil || err3 != nil || t <= 0 || m <= 0 || p <= 0 || p > 255 {
+	if err1 != nil || err2 != nil || err3 != nil ||
+		t <= 0 || t > maxArgonTime ||
+		m <= 0 || m > maxArgonMemory ||
+		p <= 0 || p > 255 {
 		return nil, ErrMalformedBlob
 	}
 
@@ -142,14 +158,17 @@ func Open(blob string, passphrase []byte) ([]byte, error) {
 	if err1 != nil || err2 != nil || err3 != nil {
 		return nil, ErrMalformedBlob
 	}
+	// Validate the nonce length before spending the KDF — a malformed blob
+	// should fail fast, not after a 64 MiB argon2 pass.
+	if len(nonce) != gcmNonceSize {
+		return nil, ErrMalformedBlob
+	}
 
 	key := argon2.IDKey(passphrase, salt, uint32(t), uint32(m), uint8(p), argonKeyLen)
 	aead, err := newAEAD(key)
+	zero(key) // the AES cipher has copied the key; drop our copy
 	if err != nil {
 		return nil, err
-	}
-	if len(nonce) != aead.NonceSize() {
-		return nil, ErrMalformedBlob
 	}
 	plain, err := aead.Open(nil, nonce, ct, nil)
 	if err != nil {
@@ -158,6 +177,15 @@ func Open(blob string, passphrase []byte) ([]byte, error) {
 		return nil, ErrBadPassphrase
 	}
 	return plain, nil
+}
+
+// zero best-effort wipes a byte slice holding key material. Go offers no
+// guarantee the compiler won't keep copies elsewhere, so this is defense in
+// depth, not a hard erasure — but it removes the obvious lingering copy.
+func zero(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
 }
 
 // ResolvePrivateKey is the single entry point the daemons call in place of
@@ -172,22 +200,35 @@ func ResolvePrivateKey(cfgValue string, passphrase []byte) ([]byte, error) {
 }
 
 // PassphraseFromEnv resolves the unseal passphrase from the environment.
-// NHP_KEY_PASSPHRASE_FILE (a path to a file whose trimmed contents are the
+// NHP_KEY_PASSPHRASE_FILE (a path to a file whose contents are the
 // passphrase) takes precedence over the inline NHP_KEY_PASSPHRASE. It
 // returns nil with no error when neither is set, so callers on the plain
 // path never need a passphrase.
+//
+// Both forms strip a single trailing newline (\n or \r\n) so the SAME
+// secret resolves identically whether it is exported inline or read from a
+// file written with `echo`/an editor. A passphrase that legitimately ends
+// in a newline is not supportable this way — an unlikely case for a secret.
 func PassphraseFromEnv() ([]byte, error) {
 	if path := os.Getenv(EnvPassphraseFile); path != "" {
 		data, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // G304: the passphrase file path is an operator-supplied config input by design
 		if err != nil {
 			return nil, fmt.Errorf("keystore: cannot read %s=%q: %w", EnvPassphraseFile, path, err)
 		}
-		return []byte(strings.TrimRight(string(data), "\r\n")), nil
+		return []byte(trimTrailingNewline(string(data))), nil
 	}
 	if pass := os.Getenv(EnvPassphrase); pass != "" {
-		return []byte(pass), nil
+		return []byte(trimTrailingNewline(pass)), nil
 	}
 	return nil, nil
+}
+
+// trimTrailingNewline removes one trailing "\n" or "\r\n" and nothing else,
+// so interior or trailing spaces in a passphrase are preserved.
+func trimTrailingNewline(s string) string {
+	s = strings.TrimSuffix(s, "\n")
+	s = strings.TrimSuffix(s, "\r")
+	return s
 }
 
 func newAEAD(key []byte) (cipher.AEAD, error) {

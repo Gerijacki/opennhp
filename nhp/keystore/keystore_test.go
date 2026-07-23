@@ -114,6 +114,65 @@ func TestOpenMalformed(t *testing.T) {
 	}
 }
 
+// TestOpenRejectsOversizedKDFParams ensures a hostile blob cannot drive
+// argon2 into a huge allocation: out-of-range time/memory are rejected as
+// malformed before the KDF runs.
+func TestOpenRejectsOversizedKDFParams(t *testing.T) {
+	// Build a structurally valid blob but swap in an absurd memory cost.
+	blob, err := Seal(randKey(t, 32), []byte("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(blob, "$")
+	parts[3] = "999999999" // memory KiB, far above maxArgonMemory
+	if _, err := Open(strings.Join(parts, "$"), []byte("pw")); err != ErrMalformedBlob {
+		t.Fatalf("oversized memory: got %v want ErrMalformedBlob", err)
+	}
+
+	parts = strings.Split(blob, "$")
+	parts[2] = "9999" // time, far above maxArgonTime
+	if _, err := Open(strings.Join(parts, "$"), []byte("pw")); err != ErrMalformedBlob {
+		t.Fatalf("oversized time: got %v want ErrMalformedBlob", err)
+	}
+}
+
+// TestOpenRejectsBadNonceLength ensures a wrong-length nonce is rejected as
+// malformed (fast-fail before the KDF).
+func TestOpenRejectsBadNonceLength(t *testing.T) {
+	blob, err := Seal(randKey(t, 32), []byte("pw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(blob, "$")
+	parts[6] = base64.RawStdEncoding.EncodeToString([]byte("shortnonce")) // != 12 bytes
+	if _, err := Open(strings.Join(parts, "$"), []byte("pw")); err != ErrMalformedBlob {
+		t.Fatalf("bad nonce length: got %v want ErrMalformedBlob", err)
+	}
+}
+
+// TestPassphraseTrimSymmetry ensures the inline and file forms resolve the
+// same secret when one carries a trailing newline and the other doesn't.
+func TestPassphraseTrimSymmetry(t *testing.T) {
+	t.Setenv(EnvPassphraseFile, "")
+	t.Setenv(EnvPassphrase, "sameSecret\n")
+	inline, err := PassphraseFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(inline) != "sameSecret" {
+		t.Fatalf("inline trailing newline not trimmed: %q", inline)
+	}
+	// Interior/leading spaces must survive.
+	t.Setenv(EnvPassphrase, "  keep spaces  ")
+	sp, err := PassphraseFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sp) != "  keep spaces  " {
+		t.Fatalf("spaces not preserved: %q", sp)
+	}
+}
+
 func TestSealRejectsEmpty(t *testing.T) {
 	if _, err := Seal(nil, []byte("pw")); err == nil {
 		t.Fatal("expected error sealing empty key")

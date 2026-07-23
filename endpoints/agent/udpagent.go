@@ -1374,9 +1374,9 @@ func (a *UdpAgent) RefreshDataAccess(ztdoId string, decrypted bool, decryptedOut
 				return "", fmt.Errorf("failed to download ztdo: %v", err)
 			}
 
-			if err := ztdo.ParseHeader(ztdoPath); err != nil {
-				fmt.Printf("Error: failed to parse ztdo header:%s\n", err)
-				return "", fmt.Errorf("failed to parse ztdo header:%s", err)
+			if parseErr := ztdo.ParseHeader(ztdoPath); parseErr != nil {
+				fmt.Printf("Error: failed to parse ztdo header:%s\n", parseErr)
+				return "", fmt.Errorf("failed to parse ztdo header:%s", parseErr)
 			}
 
 			if ztdoId != ztdo.GetObjectID() {

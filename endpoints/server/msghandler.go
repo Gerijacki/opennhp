@@ -623,8 +623,8 @@ func (s *UdpServer) HandleDHPDAVMessage(ppd *core.PacketParserData) (err error) 
 			dagMsg.ErrCode = 1
 			dagMsg.ErrMsg = err.Error()
 		} else {
-			dwaMsg, err := s.ProcessDataPrivateKeyWrapping(dwrMsg, dbConn)
-			if err != nil || dwaMsg.ErrCode != 0 {
+			dwaMsg, wrapErr := s.ProcessDataPrivateKeyWrapping(dwrMsg, dbConn)
+			if wrapErr != nil || dwaMsg.ErrCode != 0 {
 				dagMsg.ErrCode = dwaMsg.ErrCode
 				dagMsg.ErrMsg = dwaMsg.ErrMsg
 			}
@@ -721,15 +721,15 @@ func (s *UdpServer) onAttestationVerify(spo *common.SmartPolicy, attestation str
 
 	wasmBytes, err := base64.StdEncoding.DecodeString(spo.Policy)
 	if err != nil {
-		wasmPath, err := utils.DownloadFileToTemp(spo.Policy, "wasm-")
+		wasmPath, downloadErr := utils.DownloadFileToTemp(spo.Policy, "wasm-")
 		defer os.Remove(filepath.Dir(wasmPath))
 		defer os.Remove(wasmPath)
-		if err != nil {
-			return err
+		if downloadErr != nil {
+			return downloadErr
 		}
-		wasmBytes, err = os.ReadFile(wasmPath)
-		if err != nil {
-			return err
+		wasmBytes, downloadErr = os.ReadFile(wasmPath)
+		if downloadErr != nil {
+			return downloadErr
 		}
 	}
 

@@ -299,9 +299,9 @@ func (s *UdpServer) Start(dirPath string, logLevel int) (err error) {
 	}
 	if len(cookieKey) == 0 {
 		cookieKey = make([]byte, 32)
-		if _, err := rand.Read(cookieKey); err != nil {
-			log.Critical("failed to generate random cookie signing key: %v", err)
-			return fmt.Errorf("failed to generate random cookie signing key: %v", err)
+		if _, readErr := rand.Read(cookieKey); readErr != nil {
+			log.Critical("failed to generate random cookie signing key: %v", readErr)
+			return fmt.Errorf("failed to generate random cookie signing key: %v", readErr)
 		}
 		log.Info("CookieSigningKeyBase64 not set; using a random per-process key (single-instance only — clusters must share an operator-supplied key)")
 	} else {
@@ -1355,10 +1355,10 @@ func (s *UdpServer) handleNhpOpenResource(req *common.NhpAuthRequest, res *commo
 			if knkMsg.HeaderType == core.NHP_EXT {
 				openTime = 1 // timeout in 1 second
 			}
-			artMsg, err := s.processACOperation(knkMsg, acConn, srcAddr, dstAddrs, openTime)
+			artMsg, opErr := s.processACOperation(knkMsg, acConn, srcAddr, dstAddrs, openTime)
 			artMsgsMutex.Lock()
 			artMsgs[name] = artMsg
-			if err == nil {
+			if opErr == nil {
 				ackMsg.ResourceHost[name] = info.DestHost()
 				ackMsg.ACTokens[name] = artMsg.ACToken
 				ackMsg.PreAccessActions[name] = artMsg.PreAccessAction

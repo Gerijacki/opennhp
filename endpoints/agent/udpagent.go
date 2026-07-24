@@ -402,7 +402,7 @@ func (a *UdpAgent) Start(dirPath string, logLevel int) (err error) {
 	// Cache the resolved key so GetAgentEcdh (the /publicKey handler) reports
 	// the real device key without re-decoding — important when the config
 	// holds a sealed blob that a plain base64 decode would reject.
-	a.config.resolvedPrivateKey = prk
+	a.config.SetResolvedPrivateKey(prk)
 
 	a.device = core.NewDevice(core.NHP_AGENT, prk, nil)
 	if a.device == nil {
@@ -610,7 +610,7 @@ func (a *UdpAgent) ReinitWithKey(privKeyBytes []byte, cipherScheme int) error {
 	a.deviceMutex.Unlock()
 
 	a.config.PrivateKeyBase64 = base64.StdEncoding.EncodeToString(privKeyBytes)
-	a.config.resolvedPrivateKey = privKeyBytes
+	a.config.SetResolvedPrivateKey(privKeyBytes)
 	a.config.DefaultCipherScheme = cipherScheme
 
 	// Stopping the old device closes its DecryptedMsgQueue, so the

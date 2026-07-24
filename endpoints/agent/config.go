@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	toml "github.com/pelletier/go-toml/v2"
 
@@ -40,7 +41,28 @@ type Config struct {
 	// call and does not silently mis-handle a sealed key. Populated by the
 	// agent's Start (and refreshed by ReinitWithKey). Unexported, so it is
 	// already skipped by encoding/json and mapstructure — no tag needed.
+	//
+	// Guarded by keyMu: ReinitWithKey rewrites it during a rekey while an
+	// in-flight /publicKey request may be reading it, so the slice header
+	// must not be touched lock-free. Use SetResolvedPrivateKey /
+	// resolvedKey rather than the field directly.
+	keyMu              sync.RWMutex
 	resolvedPrivateKey []byte
+}
+
+// SetResolvedPrivateKey stores the raw private key resolved at startup (or
+// swapped in by a rekey). Safe for concurrent use with GetAgentEcdh.
+func (c *Config) SetResolvedPrivateKey(prk []byte) {
+	c.keyMu.Lock()
+	c.resolvedPrivateKey = prk
+	c.keyMu.Unlock()
+}
+
+// resolvedKey returns the cached raw private key, or nil if none is cached.
+func (c *Config) resolvedKey() []byte {
+	c.keyMu.RLock()
+	defer c.keyMu.RUnlock()
+	return c.resolvedPrivateKey
 }
 
 type DHPConfig struct {
@@ -56,7 +78,7 @@ func (c *Config) GetAgentEcdh() core.Ecdh {
 	// (which correctly handles a sealed PrivateKeyBase64) so a caller that
 	// reaches this before Start still gets the right key rather than a
 	// broken decode of the "v1$..." blob.
-	prk := c.resolvedPrivateKey
+	prk := c.resolvedKey()
 	if prk == nil {
 		pass, passErr := keystore.PassphraseFromEnv()
 		if passErr == nil {

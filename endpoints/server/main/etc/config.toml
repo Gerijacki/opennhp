@@ -3,7 +3,7 @@
 
 # PrivateKeyBase64 (-): server private key. Accepts either a plain base64
 #   key (default) or a sealed blob (starts with "v1$") produced by
-#   `nhp-serverd seal <base64Key>`. A sealed key is decrypted at startup
+#   `echo "$KEY" | nhp-serverd seal`. A sealed key is decrypted at startup
 #   with a passphrase read from the NHP_KEY_PASSPHRASE env var, or from the
 #   file pointed to by NHP_KEY_PASSPHRASE_FILE (recommended mode 0600).
 #   The passphrase is never stored in this file.

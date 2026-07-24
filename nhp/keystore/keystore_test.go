@@ -150,6 +150,26 @@ func TestOpenRejectsBadNonceLength(t *testing.T) {
 	}
 }
 
+// TestPassphraseFileEmptyIsDistinctError ensures pointing the file var at
+// an empty file reports that, rather than the misleading "no passphrase
+// was provided" the caller would otherwise surface.
+func TestPassphraseFileEmptyIsDistinctError(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "empty")
+	if writeErr := os.WriteFile(fp, []byte("\n"), 0600); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	t.Setenv(EnvPassphraseFile, fp)
+
+	got, err := PassphraseFromEnv()
+	if err == nil {
+		t.Fatalf("expected an error for an empty passphrase file, got %q", got)
+	}
+	if !strings.Contains(err.Error(), "is empty") {
+		t.Errorf("error should say the file is empty, got: %v", err)
+	}
+}
+
 // TestPassphraseTrimSymmetry ensures the inline and file forms resolve the
 // same secret when one carries a trailing newline and the other doesn't.
 func TestPassphraseTrimSymmetry(t *testing.T) {

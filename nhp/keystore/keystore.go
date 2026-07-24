@@ -220,7 +220,14 @@ func PassphraseFromEnv() ([]byte, error) {
 			// passphrase file should surface loudly, not be ignored.
 			return nil, fmt.Errorf("keystore: cannot read %s=%q: %w", EnvPassphraseFile, path, err)
 		}
-		return []byte(trimTrailingNewline(string(data))), nil
+		pass := trimTrailingNewline(string(data))
+		if pass == "" {
+			// Distinguish "you pointed me at an empty file" from "no
+			// passphrase was configured" — the operator clearly intended
+			// to supply one, so say what's actually wrong.
+			return nil, fmt.Errorf("keystore: %s=%q is empty", EnvPassphraseFile, path)
+		}
+		return []byte(pass), nil
 	}
 	if pass := os.Getenv(EnvPassphrase); pass != "" {
 		return []byte(trimTrailingNewline(pass)), nil

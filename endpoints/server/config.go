@@ -185,8 +185,12 @@ type AuditConfig struct {
 	// FilePath is where the ledger is written. Relative paths resolve
 	// against <exe_dir>. Defaults to "<exe_dir>/logs/audit-ledger.jsonl".
 	FilePath string `json:"filePath"`
-	// Fsync flushes each entry to disk before returning. Audit logs are
-	// low-volume, so enabling this is usually worth the durability.
+	// Fsync flushes each entry to disk before returning. Note that entries
+	// are written synchronously on the request path, so audit volume tracks
+	// knock volume: with this on, every access decision costs a disk flush
+	// and all audit writes serialize behind one mutex. Worth the durability
+	// on a normal gateway, but turn it off if the ledger becomes a
+	// bottleneck under load — the hash chain stays intact either way.
 	Fsync bool `json:"fsync"`
 	// SigningKeyBase64 is an optional base64 HMAC key. When set, each entry
 	// is additionally signed so the chain is bound to a secret the log file

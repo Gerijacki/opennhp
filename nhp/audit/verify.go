@@ -27,12 +27,21 @@ type VerifyResult struct {
 	// still fails, because removing or rewriting a committed entry breaks
 	// the prevHash linkage of the entry after it, which is checked below.
 	Skipped uint64
+	// UncheckedSigs counts entries that carry an HMAC signature which was
+	// not verified because no key was supplied. The hash chain alone only
+	// proves internal consistency: anyone who can rewrite the file can
+	// recompute every hash, so a clean result here is far weaker than a
+	// signature-checked one. Callers must surface this rather than let a
+	// signed ledger verified without its key look fully verified.
+	UncheckedSigs uint64
 }
 
 // VerifyChain walks the ledger read from r and confirms every entry's hash
 // is correct and links to the previous one. If hmacKey is non-empty each
-// entry's Sig is checked too. It returns how many entries verified and,
-// on the first break, which entry failed and why.
+// entry's Sig is checked too; if it is empty, signed entries are counted in
+// UncheckedSigs so callers do not present an unsigned pass as a full one.
+// It returns how many entries verified and, on the first break, which entry
+// failed and why.
 //
 // The checks per entry are:
 //   - the recomputed hash equals the stored Hash (no field was altered);
@@ -45,6 +54,7 @@ func VerifyChain(r io.Reader, hmacKey []byte) VerifyResult {
 
 	var count uint64
 	var skipped uint64
+	var unchecked uint64
 	prevHash := genesisHash
 	var prevSeq uint64
 	lineNo := uint64(0)
@@ -67,28 +77,33 @@ func VerifyChain(r io.Reader, hmacKey []byte) VerifyResult {
 		}
 
 		if e.PrevHash != prevHash {
-			return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: prevHash mismatch (chain broken — an earlier entry was altered, deleted or reordered)", e.Seq)}
+			return VerifyResult{Count: count, Skipped: skipped, UncheckedSigs: unchecked, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: prevHash mismatch (chain broken — an earlier entry was altered, deleted or reordered)", e.Seq)}
 		}
 		if e.Seq != prevSeq+1 {
-			return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: expected seq=%d (an entry was dropped or inserted)", e.Seq, prevSeq+1)}
+			return VerifyResult{Count: count, Skipped: skipped, UncheckedSigs: unchecked, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: expected seq=%d (an entry was dropped or inserted)", e.Seq, prevSeq+1)}
 		}
 
 		wantHash, err := computeHash(&e)
 		if err != nil {
-			return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: %w", e.Seq, err)}
+			return VerifyResult{Count: count, Skipped: skipped, UncheckedSigs: unchecked, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: %w", e.Seq, err)}
 		}
 		if wantHash != e.Hash {
-			return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: hash mismatch (this entry was altered)", e.Seq)}
+			return VerifyResult{Count: count, Skipped: skipped, UncheckedSigs: unchecked, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: hash mismatch (this entry was altered)", e.Seq)}
 		}
 
 		if len(hmacKey) > 0 {
 			wantSig, err := computeSig(&e, hmacKey)
 			if err != nil {
-				return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: %w", e.Seq, err)}
+				return VerifyResult{Count: count, Skipped: skipped, UncheckedSigs: unchecked, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: %w", e.Seq, err)}
 			}
 			if !hmac.Equal([]byte(wantSig), []byte(e.Sig)) {
-				return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: HMAC signature mismatch (wrong key or forged entry)", e.Seq)}
+				return VerifyResult{Count: count, Skipped: skipped, UncheckedSigs: unchecked, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: HMAC signature mismatch (wrong key or forged entry)", e.Seq)}
 			}
+		} else if e.Sig != "" {
+			// The entry was signed but we have no key to check it with.
+			// Record it so the caller can say the chain was verified but
+			// the signatures were not, instead of reporting a clean pass.
+			unchecked++
 		}
 
 		prevHash = e.Hash
@@ -96,8 +111,8 @@ func VerifyChain(r io.Reader, hmacKey []byte) VerifyResult {
 		count++
 	}
 	if err := sc.Err(); err != nil {
-		return VerifyResult{Count: count, Skipped: skipped, Err: fmt.Errorf("read ledger: %w", err)}
+		return VerifyResult{Count: count, Skipped: skipped, UncheckedSigs: unchecked, Err: fmt.Errorf("read ledger: %w", err)}
 	}
 
-	return VerifyResult{Count: count, Skipped: skipped}
+	return VerifyResult{Count: count, Skipped: skipped, UncheckedSigs: unchecked}
 }

@@ -43,7 +43,10 @@ ForceOverload = false
 #   for tamper-evidence that survives an attacker with write access.
 # FilePath: ledger path; relative paths resolve against the exe dir.
 #   Defaults to logs/audit-ledger.jsonl.
-# Fsync: flush each entry to disk (safer, negligible cost at audit volume).
+# Fsync: flush each entry to disk before the request continues. Entries are
+#   written on the request path, so audit volume tracks knock volume: this
+#   costs a disk flush per access decision and serializes audit writes. Keep
+#   it on for durability; turn it off if it becomes a bottleneck under load.
 # SigningKeyBase64: optional base64 HMAC key binding the chain to a secret
 #   the log file does not contain. Generate one with:
 #   head -c 32 /dev/urandom | base64

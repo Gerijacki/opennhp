@@ -148,6 +148,49 @@ func TestWrongHMACKeyRejected(t *testing.T) {
 	}
 }
 
+// A signed ledger verified without the key must not look fully verified.
+// The hash chain alone is forgeable by anyone who can rewrite the file, so
+// the result has to say the signatures went unchecked.
+func TestSignedLedgerVerifiedWithoutKeyIsReported(t *testing.T) {
+	key := []byte("audit-signing-key")
+	var buf bytes.Buffer
+	l := NewLedger(&buf, Options{HMACKey: key})
+	writeN(t, l, 3)
+
+	res := VerifyChain(bytes.NewReader(buf.Bytes()), nil)
+	if res.Err != nil {
+		t.Fatalf("chain should still verify without the key: %v", res.Err)
+	}
+	if res.UncheckedSigs != 3 {
+		t.Fatalf("UncheckedSigs=%d, want 3", res.UncheckedSigs)
+	}
+
+	// With the key, nothing is left unchecked.
+	res = VerifyChain(bytes.NewReader(buf.Bytes()), key)
+	if res.Err != nil {
+		t.Fatalf("signed chain rejected with the right key: %v", res.Err)
+	}
+	if res.UncheckedSigs != 0 {
+		t.Fatalf("UncheckedSigs=%d, want 0 when the key is supplied", res.UncheckedSigs)
+	}
+}
+
+// An unsigned ledger has nothing to leave unchecked, so a keyless verify of
+// it is a genuinely clean result and must not warn.
+func TestUnsignedLedgerReportsNoUncheckedSigs(t *testing.T) {
+	var buf bytes.Buffer
+	l := NewLedger(&buf, Options{})
+	writeN(t, l, 3)
+
+	res := VerifyChain(bytes.NewReader(buf.Bytes()), nil)
+	if res.Err != nil {
+		t.Fatalf("unsigned chain rejected: %v", res.Err)
+	}
+	if res.UncheckedSigs != 0 {
+		t.Fatalf("UncheckedSigs=%d, want 0 for an unsigned ledger", res.UncheckedSigs)
+	}
+}
+
 func TestOpenResumesChainAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "audit.log")

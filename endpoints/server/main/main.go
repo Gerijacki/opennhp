@@ -208,6 +208,15 @@ func main() {
 						os.Exit(1)
 					}
 					fmt.Printf("OK: %d entr%s, hash chain intact.\n", res.Count, plural(res.Count))
+					if res.UncheckedSigs > 0 {
+						// Do not let a signed ledger checked without its key
+						// read as fully verified. The hash chain alone is
+						// forgeable by anyone who can rewrite the file; the
+						// signatures are the part that isn't, and they were
+						// not checked here.
+						fmt.Printf("warning: %d signed entr%s NOT verified — no --key given, so only the hash chain was checked.\n",
+							res.UncheckedSigs, plural(res.UncheckedSigs))
+					}
 					if res.Skipped > 0 {
 						// Damage, not tampering: the chain still links up, so
 						// no committed entry was altered or removed. Say so

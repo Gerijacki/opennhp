@@ -357,7 +357,8 @@ func (l *Ledger) Log(evType, severity string, fields map[string]string) error {
 		// the damage stays confined to its own line. Best effort: if this
 		// write fails too there is nothing further to do, and Open's
 		// truncate handles it on the next restart.
-		if n > 0 && (n > len(line) || line[n-1] != '\n') {
+		// n is at most len(line) by the io.Writer contract, so the index is safe.
+		if n > 0 && line[n-1] != '\n' {
 			_, _ = l.w.Write([]byte{'\n'})
 		}
 		return err

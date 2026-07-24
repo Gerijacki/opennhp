@@ -69,6 +69,14 @@ const (
 	// supplies the unseal passphrase without putting it in config.toml.
 	// The file form wins if both are set so a file reference can override
 	// a stale exported value.
+	//
+	// EnvPassphraseFile is the form to recommend. An environment variable
+	// is readable from the process environment, is routinely written into
+	// systemd units and orchestrator manifests, is captured in crash
+	// dumps, and is inherited by every child process — much the same
+	// exposure as the config file this feature exists to protect. A
+	// 0600 file is a meaningfully smaller target; EnvPassphrase is there
+	// for interactive and test use.
 	EnvPassphrase     = "NHP_KEY_PASSPHRASE"
 	EnvPassphraseFile = "NHP_KEY_PASSPHRASE_FILE"
 )

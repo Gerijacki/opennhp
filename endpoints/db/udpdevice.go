@@ -811,21 +811,16 @@ func (a *UdpDevice) GetOwnEcdh() core.Ecdh {
 		eccMode = core.ECC_SM2
 	}
 
-	// Start populates the cache before anything calls this, but fall back to
-	// resolving on demand rather than building an ECDH from a nil key if that
-	// ever stops holding — mirrors the agent's GetAgentEcdh.
-	prk := a.privateKey
-	if prk == nil {
-		pass, err := keystore.PassphraseFromEnv()
-		if err == nil {
-			prk, err = keystore.ResolvePrivateKey(a.config.PrivateKeyBase64, pass)
-		}
-		if err != nil {
-			log.Error("GetOwnEcdh: cannot resolve private key (sealed key without a valid passphrase?): %v", err)
-		}
-	}
-
-	return core.ECDHFromKey(eccMode, prk)
+	// Start resolves the private key and returns an error if it cannot, so
+	// the device never reaches a serving state with an empty a.privateKey
+	// and this cannot hand a nil Ecdh to callers that dereference it.
+	//
+	// There is deliberately no resolve-on-demand fallback here. Callers of
+	// this method feed the key straight into key agreement, so a fallback
+	// that quietly failed would be worse than not having one: it would
+	// return an Ecdh built from a nil key and the failure would surface as
+	// a bad shared secret rather than as a startup error.
+	return core.ECDHFromKey(eccMode, a.privateKey)
 }
 
 func (a *UdpDevice) isTEEAuthorized(teePbkBase64 string) bool {

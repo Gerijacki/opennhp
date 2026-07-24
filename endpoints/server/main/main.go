@@ -194,13 +194,11 @@ func main() {
 						}
 						hmacKey = decoded
 					}
-					f, err := os.Open(filepath.Clean(path))
+					res, err := verifyLedgerFile(path, hmacKey)
 					if err != nil {
 						return err
 					}
-					defer f.Close()
 
-					res := audit.VerifyChain(f, hmacKey)
 					if res.Err != nil {
 						fmt.Printf("FAILED: %v\n", res.Err)
 						fmt.Printf("%d entr%s verified before the break.\n", res.Count, plural(res.Count))
@@ -210,6 +208,13 @@ func main() {
 						os.Exit(1)
 					}
 					fmt.Printf("OK: %d entr%s, hash chain intact.\n", res.Count, plural(res.Count))
+					if res.Skipped > 0 {
+						// Damage, not tampering: the chain still links up, so
+						// no committed entry was altered or removed. Say so
+						// explicitly rather than leaving it to look like a
+						// clean bill of health.
+						fmt.Printf("note: skipped %d unparseable line(s) — likely a torn write from an unclean shutdown, not tampering.\n", res.Skipped)
+					}
 					return nil
 				},
 			},
@@ -226,6 +231,18 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		panic(err)
 	}
+}
+
+// verifyLedgerFile opens the ledger and walks its chain. It exists so the
+// file handle is closed before the caller decides whether to exit — a
+// deferred Close in the command action would never run on the os.Exit path.
+func verifyLedgerFile(path string, hmacKey []byte) (audit.VerifyResult, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return audit.VerifyResult{}, err
+	}
+	defer f.Close()
+	return audit.VerifyChain(f, hmacKey), nil
 }
 
 // plural returns the English plural suffix for "entry"/"entries" counts.

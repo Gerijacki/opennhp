@@ -178,11 +178,30 @@ func (s *UdpServer) HandleOTPRequest(ppd *core.PacketParserData) (err error) {
 	err = json.Unmarshal(ppd.BodyMessage, otpMsg)
 	if err != nil {
 		log.Error("server-agent(#%d@%s)[HandleOTPRequest] failed to parse %s message: %v", transactionId, addrStr, core.HeaderTypeToString(ppd.HeaderType), err)
+		// Audit the rejected request too: a burst of unparseable OTP
+		// requests from one source is exactly the kind of thing the ledger
+		// should carry. The user is unknown at this point.
+		if s.auditLedger != nil {
+			s.auditEvent("otp_request", audit.SeverityWarn, map[string]string{
+				"src":    addrStr,
+				"result": "rejected",
+				"reason": "malformed request",
+			})
+		}
 		return err
 	}
 
 	handler := s.FindPluginHandler(otpMsg.AuthServiceId)
 	if handler == nil {
+		if s.auditLedger != nil {
+			s.auditEvent("otp_request", audit.SeverityWarn, map[string]string{
+				"user":   otpMsg.UserId,
+				"src":    addrStr,
+				"aspId":  otpMsg.AuthServiceId,
+				"result": "rejected",
+				"reason": common.ErrAuthHandlerNotFound.Error(),
+			})
+		}
 		return common.ErrAuthHandlerNotFound
 	}
 

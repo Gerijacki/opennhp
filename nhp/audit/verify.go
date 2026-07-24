@@ -19,6 +19,14 @@ type VerifyResult struct {
 	// BadSeq is the seq of the first entry that failed, valid only when
 	// Err is non-nil.
 	BadSeq uint64
+	// Skipped counts lines that could not be parsed as entries at all.
+	// These are reported as damage, not tampering: a torn write leaves a
+	// fragment that is not a record, and failing the whole verification
+	// over it would make every crash look identical to an attack — which
+	// is how operators learn to ignore a FAILED result. Real tampering
+	// still fails, because removing or rewriting a committed entry breaks
+	// the prevHash linkage of the entry after it, which is checked below.
+	Skipped uint64
 }
 
 // VerifyChain walks the ledger read from r and confirms every entry's hash
@@ -36,6 +44,7 @@ func VerifyChain(r io.Reader, hmacKey []byte) VerifyResult {
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var count uint64
+	var skipped uint64
 	prevHash := genesisHash
 	var prevSeq uint64
 	lineNo := uint64(0)
@@ -49,31 +58,36 @@ func VerifyChain(r io.Reader, hmacKey []byte) VerifyResult {
 
 		var e Event
 		if err := json.Unmarshal(raw, &e); err != nil {
-			return VerifyResult{Count: count, BadSeq: prevSeq + 1, Err: fmt.Errorf("line %d: malformed JSON: %w", lineNo, err)}
+			// Not a record at all — count it as damage and keep going.
+			// If it replaced a committed entry, the NEXT entry's prevHash
+			// no longer matches and the chain check below reports the
+			// break, so this cannot be used to hide tampering.
+			skipped++
+			continue
 		}
 
 		if e.PrevHash != prevHash {
-			return VerifyResult{Count: count, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: prevHash mismatch (chain broken — an earlier entry was altered, deleted or reordered)", e.Seq)}
+			return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: prevHash mismatch (chain broken — an earlier entry was altered, deleted or reordered)", e.Seq)}
 		}
 		if e.Seq != prevSeq+1 {
-			return VerifyResult{Count: count, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: expected seq=%d (an entry was dropped or inserted)", e.Seq, prevSeq+1)}
+			return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: expected seq=%d (an entry was dropped or inserted)", e.Seq, prevSeq+1)}
 		}
 
 		wantHash, err := computeHash(&e)
 		if err != nil {
-			return VerifyResult{Count: count, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: %w", e.Seq, err)}
+			return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: %w", e.Seq, err)}
 		}
 		if wantHash != e.Hash {
-			return VerifyResult{Count: count, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: hash mismatch (this entry was altered)", e.Seq)}
+			return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: hash mismatch (this entry was altered)", e.Seq)}
 		}
 
 		if len(hmacKey) > 0 {
 			wantSig, err := computeSig(&e, hmacKey)
 			if err != nil {
-				return VerifyResult{Count: count, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: %w", e.Seq, err)}
+				return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: %w", e.Seq, err)}
 			}
 			if !hmac.Equal([]byte(wantSig), []byte(e.Sig)) {
-				return VerifyResult{Count: count, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: HMAC signature mismatch (wrong key or forged entry)", e.Seq)}
+				return VerifyResult{Count: count, Skipped: skipped, BadSeq: e.Seq, Err: fmt.Errorf("entry seq=%d: HMAC signature mismatch (wrong key or forged entry)", e.Seq)}
 			}
 		}
 
@@ -82,8 +96,8 @@ func VerifyChain(r io.Reader, hmacKey []byte) VerifyResult {
 		count++
 	}
 	if err := sc.Err(); err != nil {
-		return VerifyResult{Count: count, Err: fmt.Errorf("read ledger: %w", err)}
+		return VerifyResult{Count: count, Skipped: skipped, Err: fmt.Errorf("read ledger: %w", err)}
 	}
 
-	return VerifyResult{Count: count}
+	return VerifyResult{Count: count, Skipped: skipped}
 }

@@ -228,6 +228,15 @@ func TestOpenToleratesTornTrailingLine(t *testing.T) {
 	if l2.MalformedOnOpen != 1 {
 		t.Errorf("MalformedOnOpen = %d, want 1", l2.MalformedOnOpen)
 	}
+	// The fragment must be gone: leaving it in place would make
+	// `audit verify` report FAILED forever for a benign crash.
+	afterOpen, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(afterOpen, []byte(`"time":"2026-01-0`)) {
+		t.Error("torn fragment should have been truncated on Open")
+	}
 	// The chain must continue from entry 3, not restart at 1.
 	if logErr := l2.Log("knock", SeverityInfo, nil); logErr != nil {
 		t.Fatal(logErr)
@@ -247,6 +256,103 @@ func TestOpenToleratesTornTrailingLine(t *testing.T) {
 	}
 	if lastEvt.Seq != 4 {
 		t.Errorf("resumed seq = %d, want 4 (continuing after the 3 good entries)", lastEvt.Seq)
+	}
+}
+
+// TestTornLedgerStillVerifiesAfterReopen is the end-to-end version of the
+// guarantee: a crash-damaged ledger, once reopened by the server, must
+// verify clean rather than reporting FAILED forever. Operators who get a
+// FAILED after every crash stop trusting FAILED at all.
+func TestTornLedgerStillVerifiesAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+
+	l1, err := Open(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeN(t, l1, 3)
+	if closeErr := l1.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, werr := f.WriteString(`{"seq":4,"ti`); werr != nil {
+		t.Fatal(werr)
+	}
+	f.Close()
+
+	l2, err := Open(path, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeN(t, l2, 1)
+	if closeErr := l2.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := VerifyChain(bytes.NewReader(data), nil)
+	if res.Err != nil {
+		t.Fatalf("a reopened torn ledger must verify clean, got: %v", res.Err)
+	}
+	if res.Skipped != 0 {
+		t.Errorf("Skipped = %d, want 0 (the fragment was truncated on reopen)", res.Skipped)
+	}
+	if res.Count != 4 {
+		t.Errorf("Count = %d, want 4", res.Count)
+	}
+}
+
+// TestVerifyReportsUnparseableAsDamageNotTampering covers a ledger that
+// still contains an unparseable line (e.g. one a rotation tool inserted,
+// which Open would not truncate because it is not the trailing fragment):
+// it is counted, not treated as a chain break, as long as the committed
+// entries still link up.
+func TestVerifyReportsUnparseableAsDamageNotTampering(t *testing.T) {
+	var buf bytes.Buffer
+	l := NewLedger(&buf, Options{})
+	writeN(t, l, 3)
+
+	lines := splitLines(buf.Bytes())
+	// Insert a junk line between two good entries without touching them.
+	withJunk := [][]byte{lines[0], []byte("not json at all"), lines[1], lines[2]}
+
+	res := VerifyChain(bytes.NewReader(join(withJunk)), nil)
+	if res.Err != nil {
+		t.Fatalf("junk line should not fail the chain, got: %v", res.Err)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1", res.Skipped)
+	}
+	if res.Count != 3 {
+		t.Errorf("Count = %d, want 3", res.Count)
+	}
+}
+
+// TestVerifyStillCatchesReplacedEntry is the security counterpart: tolerating
+// unparseable lines must NOT let an attacker hide a removed/rewritten entry.
+// Replacing a committed entry with junk breaks the next entry's prevHash.
+func TestVerifyStillCatchesReplacedEntry(t *testing.T) {
+	var buf bytes.Buffer
+	l := NewLedger(&buf, Options{})
+	writeN(t, l, 4)
+
+	lines := splitLines(buf.Bytes())
+	lines[1] = []byte("garbage that replaced a real entry")
+
+	res := VerifyChain(bytes.NewReader(join(lines)), nil)
+	if res.Err == nil {
+		t.Fatal("replacing a committed entry with junk must still FAIL verification")
+	}
+	if res.BadSeq != 3 {
+		t.Errorf("BadSeq = %d, want 3 (the entry whose prevHash no longer matches)", res.BadSeq)
 	}
 }
 

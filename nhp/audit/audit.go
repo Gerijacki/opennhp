@@ -18,6 +18,7 @@ package audit
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -181,18 +182,26 @@ func Open(path string, opts Options) (*Ledger, error) {
 		return nil, fmt.Errorf("audit: open %q: %w", path, err)
 	}
 
+	// If the file does not end in a newline, a previous append was torn
+	// mid-write. Drop that fragment. Two reasons it is dropped rather than
+	// newline-terminated: appending after it would concatenate the next
+	// entry onto the fragment (turning one damaged line into two), and
+	// leaving it in place would make `audit verify` report FAILED forever
+	// for what is really a benign crash — training operators to ignore the
+	// one signal the ledger exists to give. A torn tail was never a
+	// complete committed record, so nothing durable is lost.
+	//
+	// Done before the append handle is opened: on Windows, truncating a
+	// file opened with O_APPEND is refused.
+	// scanTail has already counted the fragment in `malformed`, so this
+	// only removes it — it does not count it again.
+	if _, err := truncatePartialLine(path); err != nil {
+		return nil, err
+	}
+
 	f, err := os.OpenFile(filepath.Clean(path), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("audit: open for append: %w", err)
-	}
-
-	// If the file does not end in a newline, a previous append was torn
-	// mid-write. Close that partial line off before appending, or the next
-	// entry would be concatenated onto the fragment and be unparseable
-	// too — turning one damaged line into two.
-	if err := terminatePartialLine(f, path); err != nil {
-		f.Close()
-		return nil, err
 	}
 
 	l := NewLedger(f, opts)
@@ -203,34 +212,67 @@ func Open(path string, opts Options) (*Ledger, error) {
 	return l, nil
 }
 
-// terminatePartialLine writes a newline if the file is non-empty and its
-// last byte is not already one.
-func terminatePartialLine(f *os.File, path string) error {
-	info, err := f.Stat()
+// truncatePartialLine drops a trailing fragment that has no terminating
+// newline, leaving the file ending on the last complete line. It reports
+// whether anything was removed.
+//
+// Only the unterminated tail is ever removed: a fragment with no newline
+// after it cannot be a complete record (Log writes the newline as part of
+// the same append), so it was never durably committed. Complete lines are
+// never touched, whatever their content — deleting those would be exactly
+// the tampering this package exists to detect.
+func truncatePartialLine(path string) (bool, error) {
+	rf, err := os.OpenFile(filepath.Clean(path), os.O_RDWR, 0600)
 	if err != nil {
-		return fmt.Errorf("audit: stat %q: %w", path, err)
-	}
-	if info.Size() == 0 {
-		return nil
-	}
-
-	rf, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		return fmt.Errorf("audit: reopen %q: %w", path, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("audit: open %q for repair: %w", path, err)
 	}
 	defer rf.Close()
 
+	info, err := rf.Stat()
+	if err != nil {
+		return false, fmt.Errorf("audit: stat %q: %w", path, err)
+	}
+	size := info.Size()
+	if size == 0 {
+		return false, nil
+	}
+
 	var lastByte [1]byte
-	if _, err := rf.ReadAt(lastByte[:], info.Size()-1); err != nil {
-		return fmt.Errorf("audit: read tail of %q: %w", path, err)
+	if _, err := rf.ReadAt(lastByte[:], size-1); err != nil {
+		return false, fmt.Errorf("audit: read tail of %q: %w", path, err)
 	}
 	if lastByte[0] == '\n' {
-		return nil
+		return false, nil
 	}
-	if _, err := f.Write([]byte{'\n'}); err != nil {
-		return fmt.Errorf("audit: terminate partial line in %q: %w", path, err)
+
+	// Walk backwards to the newline that ends the last complete line.
+	const chunk = 4096
+	buf := make([]byte, chunk)
+	keep := int64(0) // bytes to retain; 0 means the whole file is one fragment
+	pos := size
+	for pos > 0 {
+		n := int64(chunk)
+		if pos < n {
+			n = pos
+		}
+		start := pos - n
+		if _, err := rf.ReadAt(buf[:n], start); err != nil {
+			return false, fmt.Errorf("audit: scan tail of %q: %w", path, err)
+		}
+		if i := bytes.LastIndexByte(buf[:n], '\n'); i >= 0 {
+			keep = start + int64(i) + 1
+			break
+		}
+		pos = start
 	}
-	return nil
+
+	if err := rf.Truncate(keep); err != nil {
+		return false, fmt.Errorf("audit: truncate partial line in %q: %w", path, err)
+	}
+	return true, nil
 }
 
 // scanTail reads every line and returns the last parseable entry's seq and

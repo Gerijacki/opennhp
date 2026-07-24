@@ -156,8 +156,8 @@ func TestOpenResumesChainAcrossRestart(t *testing.T) {
 		t.Fatalf("Open #1: %v", err)
 	}
 	writeN(t, l1, 3)
-	if err := l1.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := l1.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	// Reopen and append more — the chain must continue, not restart.
@@ -166,8 +166,8 @@ func TestOpenResumesChainAcrossRestart(t *testing.T) {
 		t.Fatalf("Open #2: %v", err)
 	}
 	writeN(t, l2, 2)
-	if err := l2.Close(); err != nil {
-		t.Fatal(err)
+	if closeErr := l2.Close(); closeErr != nil {
+		t.Fatal(closeErr)
 	}
 
 	data, err := os.ReadFile(path)
@@ -192,6 +192,61 @@ func TestOpenResumesChainAcrossRestart(t *testing.T) {
 		if e.Seq != uint64(i+1) {
 			t.Fatalf("entry %d has seq=%d, want %d", i, e.Seq, i+1)
 		}
+	}
+}
+
+// TestOpenToleratesTornTrailingLine covers the crash/power-loss case: a
+// partial trailing line must not stop the ledger from opening. The chain
+// resumes from the last good entry and the damage is reported, not fatal.
+func TestOpenToleratesTornTrailingLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "audit.log")
+
+	l1, err := Open(path, Options{})
+	if err != nil {
+		t.Fatalf("Open #1: %v", err)
+	}
+	writeN(t, l1, 3)
+	if closeErr := l1.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	// Simulate a torn append: a truncated JSON fragment with no newline.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, werr := f.WriteString(`{"seq":4,"time":"2026-01-0`); werr != nil {
+		t.Fatal(werr)
+	}
+	f.Close()
+
+	l2, err := Open(path, Options{})
+	if err != nil {
+		t.Fatalf("Open must tolerate a torn trailing line, got: %v", err)
+	}
+	if l2.MalformedOnOpen != 1 {
+		t.Errorf("MalformedOnOpen = %d, want 1", l2.MalformedOnOpen)
+	}
+	// The chain must continue from entry 3, not restart at 1.
+	if logErr := l2.Log("knock", SeverityInfo, nil); logErr != nil {
+		t.Fatal(logErr)
+	}
+	if closeErr := l2.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := splitLines(data)
+	var lastEvt Event
+	if uerr := json.Unmarshal(lines[len(lines)-1], &lastEvt); uerr != nil {
+		t.Fatalf("last line should be a valid entry: %v", uerr)
+	}
+	if lastEvt.Seq != 4 {
+		t.Errorf("resumed seq = %d, want 4 (continuing after the 3 good entries)", lastEvt.Seq)
 	}
 }
 

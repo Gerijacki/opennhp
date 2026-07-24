@@ -111,6 +111,13 @@ const genesisHash = "00000000000000000000000000000000000000000000000000000000000
 
 // Ledger is a concurrency-safe, append-only, hash-chained event writer.
 type Ledger struct {
+	// MalformedOnOpen is how many unparseable lines Open skipped while
+	// resuming an existing ledger (a torn trailing write after a crash is
+	// the usual cause). Non-zero means the file deserves an `audit verify`
+	// and an operator's attention; it is not fatal and the chain simply
+	// continues from the last good entry. Read-only after Open.
+	MalformedOnOpen int
+
 	mu       sync.Mutex
 	w        io.Writer
 	closer   io.Closer
@@ -157,12 +164,16 @@ func Open(path string, opts Options) (*Ledger, error) {
 	}
 
 	seq, last := uint64(0), genesisHash
+	malformed := 0
 	if f, err := os.Open(filepath.Clean(path)); err == nil {
-		lastSeq, lastHash, scanErr := scanTail(f)
+		lastSeq, lastHash, bad, scanErr := scanTail(f)
 		f.Close()
 		if scanErr != nil {
+			// Only a real I/O failure gets here; unparseable content is
+			// tolerated by scanTail (see below).
 			return nil, fmt.Errorf("audit: existing ledger %q is unreadable: %w", path, scanErr)
 		}
+		malformed = bad
 		if lastHash != "" {
 			seq, last = lastSeq, lastHash
 		}
@@ -175,20 +186,71 @@ func Open(path string, opts Options) (*Ledger, error) {
 		return nil, fmt.Errorf("audit: open for append: %w", err)
 	}
 
+	// If the file does not end in a newline, a previous append was torn
+	// mid-write. Close that partial line off before appending, or the next
+	// entry would be concatenated onto the fragment and be unparseable
+	// too — turning one damaged line into two.
+	if err := terminatePartialLine(f, path); err != nil {
+		f.Close()
+		return nil, err
+	}
+
 	l := NewLedger(f, opts)
 	l.closer = f
 	l.seq = seq
 	l.lastHash = last
+	l.MalformedOnOpen = malformed
 	return l, nil
 }
 
-// scanTail reads every line and returns the last entry's seq and hash, so
-// Open can continue the chain. It parses only the fields it needs.
-func scanTail(r io.Reader) (uint64, string, error) {
+// terminatePartialLine writes a newline if the file is non-empty and its
+// last byte is not already one.
+func terminatePartialLine(f *os.File, path string) error {
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("audit: stat %q: %w", path, err)
+	}
+	if info.Size() == 0 {
+		return nil
+	}
+
+	rf, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return fmt.Errorf("audit: reopen %q: %w", path, err)
+	}
+	defer rf.Close()
+
+	var lastByte [1]byte
+	if _, err := rf.ReadAt(lastByte[:], info.Size()-1); err != nil {
+		return fmt.Errorf("audit: read tail of %q: %w", path, err)
+	}
+	if lastByte[0] == '\n' {
+		return nil
+	}
+	if _, err := f.Write([]byte{'\n'}); err != nil {
+		return fmt.Errorf("audit: terminate partial line in %q: %w", path, err)
+	}
+	return nil
+}
+
+// scanTail reads every line and returns the last parseable entry's seq and
+// hash (so Open can continue the chain) plus a count of lines it could not
+// parse. It parses only the fields it needs.
+//
+// Unparseable content is deliberately NOT an error. A crash or power loss
+// mid-append leaves a torn trailing line, and a log-rotation tool can drop
+// a stray line in; refusing to open the ledger in those cases would take
+// the whole daemon down over a cosmetic log problem. Instead the chain
+// resumes from the last good entry and the caller is told how many lines
+// were skipped so it can log loudly. Detecting real tampering remains the
+// job of VerifyChain / `audit verify`, which is the out-of-band tool for
+// exactly that. Only a genuine I/O failure returns an error here.
+func scanTail(r io.Reader) (uint64, string, int, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	var seq uint64
 	var hash string
+	malformed := 0
 	for sc.Scan() {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -196,14 +258,15 @@ func scanTail(r io.Reader) (uint64, string, error) {
 		}
 		var e Event
 		if err := json.Unmarshal(line, &e); err != nil {
-			return 0, "", err
+			malformed++
+			continue
 		}
 		seq, hash = e.Seq, e.Hash
 	}
 	if err := sc.Err(); err != nil {
-		return 0, "", err
+		return 0, "", malformed, err
 	}
-	return seq, hash, nil
+	return seq, hash, malformed, nil
 }
 
 // Log appends one event of the given type/severity with optional key/value

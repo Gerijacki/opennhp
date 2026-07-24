@@ -46,6 +46,13 @@ func (s *UdpServer) initAuditLedger() error {
 	}
 	s.auditLedger = ledger
 	log.Info("audit ledger enabled at %s (signed=%v)", path, len(hmacKey) > 0)
+	if ledger.MalformedOnOpen > 0 {
+		// Not fatal — the chain resumed from the last good entry — but an
+		// operator should look at the file (likely a torn write from an
+		// unclean shutdown) and run `audit verify` on it.
+		log.Critical("audit ledger %s: skipped %d unparseable line(s) while resuming; run 'audit verify' on it",
+			path, ledger.MalformedOnOpen)
+	}
 	return nil
 }
 

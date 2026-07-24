@@ -116,6 +116,12 @@ func (s *UdpServer) HandleKnockRequest(ppd *core.PacketParserData) (err error) {
 	// the NHP knock path is a per-resource access decision; the DHP path
 	// (evidence appraisal) is audited elsewhere. The ledger nil-guards, so
 	// this whole block is skipped cheaply when auditing is off.
+	//
+	// This deliberately records the DECISION, not its delivery: it is
+	// emitted before the ACK is handed to the transaction, so a later send
+	// failure still leaves a "granted" entry. That is the intent — the
+	// authorization outcome is what an audit trail must capture, and the
+	// agent simply retries when an ACK is lost.
 	if s.auditLedger != nil && ppd.HeaderType != core.DHP_KNK {
 		granted := err == nil && ackMsg != nil && ackMsg.ErrCode == common.ErrSuccess.ErrorCode()
 		severity, result := audit.SeverityWarn, "denied"

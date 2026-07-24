@@ -207,7 +207,6 @@ func main() {
 						// Exit non-zero with a clean message rather than a
 						// panic stack trace — this is a verification tool and
 						// a failed check is an expected, reportable outcome.
-						f.Close()
 						os.Exit(1)
 					}
 					fmt.Printf("OK: %d entr%s, hash chain intact.\n", res.Count, plural(res.Count))

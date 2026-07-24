@@ -380,10 +380,12 @@ func (s *UdpServer) Start(dirPath string, logLevel int) (err error) {
 	}
 	s.keyStore = ks
 
-	// Initialize the tamper-evident audit ledger if enabled.
-	if err := s.initAuditLedger(); err != nil {
-		log.Critical("failed to open audit ledger: %v", err)
-		return err
+	// Initialize the tamper-evident audit ledger if enabled. A failure here
+	// is logged but never blocks startup: refusing to boot the gateway
+	// because an audit file can't be opened would turn a logging problem
+	// into an outage. The server continues with auditing disabled.
+	if auditErr := s.initAuditLedger(); auditErr != nil {
+		log.Critical("audit ledger disabled — failed to open: %v", auditErr)
 	}
 
 	s.remoteConnectionMap = make(map[string]*UdpConn)

@@ -33,9 +33,14 @@ ForceOverload = false
 
 # Tamper-evident security audit ledger (optional, disabled by default).
 # When Enabled, security decisions (knock granted/denied, OTP issued/failed,
-# agent registered) are appended as hash-chained JSON lines so any later
-# edit, deletion or reordering is detectable. Verify a ledger with:
-#   nhp-serverd audit verify <FilePath> [--key <SigningKey>]
+# agent registered) are appended as hash-chained JSON lines. Verify with:
+#   nhp-serverd audit verify <FilePath> [--key <SigningKeyBase64>]
+# IMPORTANT — what the chain does and does not protect against:
+#   Without SigningKeyBase64 the chain detects accidental corruption and
+#   casual edits, but NOT a determined attacker: anyone who can write the
+#   file can recompute the whole SHA-256 chain and produce a file that
+#   verifies clean. Set SigningKeyBase64 (and keep the key off this host)
+#   for tamper-evidence that survives an attacker with write access.
 # FilePath: ledger path; relative paths resolve against the exe dir.
 #   Defaults to logs/audit-ledger.jsonl.
 # Fsync: flush each entry to disk (safer, negligible cost at audit volume).

@@ -198,23 +198,27 @@ func (s *UdpServer) HandleOTPRequest(ppd *core.PacketParserData) (err error) {
 	err = handler.RequestOTP(otpReq, s.NewNhpServerHelper(ppd))
 	if err != nil {
 		log.Error("server-agent(%s#%d@%s)[HandleOTPRequest] error: %v", otpMsg.UserId, transactionId, addrStr, err)
-		s.auditEvent("otp_request", audit.SeverityWarn, map[string]string{
-			"user":   otpMsg.UserId,
-			"src":    addrStr,
-			"aspId":  otpMsg.AuthServiceId,
-			"result": "failed",
-			"reason": err.Error(),
-		})
+		if s.auditLedger != nil {
+			s.auditEvent("otp_request", audit.SeverityWarn, map[string]string{
+				"user":   otpMsg.UserId,
+				"src":    addrStr,
+				"aspId":  otpMsg.AuthServiceId,
+				"result": "failed",
+				"reason": err.Error(),
+			})
+		}
 		return err
 	}
 
 	log.Info("server-agent(%s#%d@%s)[HandleOTPRequest] succeeded", otpMsg.UserId, transactionId, addrStr)
-	s.auditEvent("otp_request", audit.SeverityInfo, map[string]string{
-		"user":   otpMsg.UserId,
-		"src":    addrStr,
-		"aspId":  otpMsg.AuthServiceId,
-		"result": "issued",
-	})
+	if s.auditLedger != nil {
+		s.auditEvent("otp_request", audit.SeverityInfo, map[string]string{
+			"user":   otpMsg.UserId,
+			"src":    addrStr,
+			"aspId":  otpMsg.AuthServiceId,
+			"result": "issued",
+		})
+	}
 	return nil
 }
 

@@ -38,8 +38,9 @@ type Config struct {
 	// has been resolved once at startup (plain base64 or an unsealed blob).
 	// GetAgentEcdh reads it so it does not re-run the unseal KDF on every
 	// call and does not silently mis-handle a sealed key. Populated by the
-	// agent's Start (and refreshed by ReinitWithKey); never serialized.
-	resolvedPrivateKey []byte `json:"-"`
+	// agent's Start (and refreshed by ReinitWithKey). Unexported, so it is
+	// already skipped by encoding/json and mapstructure — no tag needed.
+	resolvedPrivateKey []byte
 }
 
 type DHPConfig struct {

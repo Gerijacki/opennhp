@@ -211,7 +211,8 @@ func ResolvePrivateKey(cfgValue string, passphrase []byte) ([]byte, error) {
 // in a newline is not supportable this way — an unlikely case for a secret.
 func PassphraseFromEnv() ([]byte, error) {
 	if path := os.Getenv(EnvPassphraseFile); path != "" {
-		data, err := os.ReadFile(filepath.Clean(path)) //nolint:gosec // G304: the passphrase file path is an operator-supplied config input by design
+		// The path is an operator-supplied config input by design.
+		data, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			// Fail closed: if the operator explicitly set the file var but
 			// the file can't be read, abort startup rather than silently

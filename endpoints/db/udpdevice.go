@@ -811,7 +811,21 @@ func (a *UdpDevice) GetOwnEcdh() core.Ecdh {
 		eccMode = core.ECC_SM2
 	}
 
-	return core.ECDHFromKey(eccMode, a.privateKey)
+	// Start populates the cache before anything calls this, but fall back to
+	// resolving on demand rather than building an ECDH from a nil key if that
+	// ever stops holding — mirrors the agent's GetAgentEcdh.
+	prk := a.privateKey
+	if prk == nil {
+		pass, err := keystore.PassphraseFromEnv()
+		if err == nil {
+			prk, err = keystore.ResolvePrivateKey(a.config.PrivateKeyBase64, pass)
+		}
+		if err != nil {
+			log.Error("GetOwnEcdh: cannot resolve private key (sealed key without a valid passphrase?): %v", err)
+		}
+	}
+
+	return core.ECDHFromKey(eccMode, prk)
 }
 
 func (a *UdpDevice) isTEEAuthorized(teePbkBase64 string) bool {

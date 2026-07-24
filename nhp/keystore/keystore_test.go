@@ -235,8 +235,8 @@ func TestPassphraseFromEnv(t *testing.T) {
 	// File form takes precedence and trailing newline is trimmed.
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "pass")
-	if err := os.WriteFile(fp, []byte("file-secret\n"), 0600); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(fp, []byte("file-secret\n"), 0600); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	t.Setenv(EnvPassphraseFile, fp)
 	got, err = PassphraseFromEnv()

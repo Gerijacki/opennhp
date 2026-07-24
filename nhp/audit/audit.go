@@ -347,8 +347,19 @@ func (l *Ledger) Log(evType, severity string, fields map[string]string) error {
 		return err
 	}
 	line = append(line, '\n')
-	if _, err := l.w.Write(line); err != nil {
+	if n, err := l.w.Write(line); err != nil {
 		l.seq--
+		// A short write leaves a fragment with no terminating newline. If
+		// it is left that way, the next entry is appended onto it and the
+		// two merge into a single unparseable line — which swallows a
+		// committed entry and makes the chain read as BROKEN (FAILED)
+		// rather than merely damaged (Skipped). Close the fragment off so
+		// the damage stays confined to its own line. Best effort: if this
+		// write fails too there is nothing further to do, and Open's
+		// truncate handles it on the next restart.
+		if n > 0 && (n > len(line) || line[n-1] != '\n') {
+			_, _ = l.w.Write([]byte{'\n'})
+		}
 		return err
 	}
 	if l.fsync {

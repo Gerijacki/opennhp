@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -353,6 +354,56 @@ func TestVerifyStillCatchesReplacedEntry(t *testing.T) {
 	}
 	if res.BadSeq != 3 {
 		t.Errorf("BadSeq = %d, want 3 (the entry whose prevHash no longer matches)", res.BadSeq)
+	}
+}
+
+// shortWriter writes only the first `limit` bytes of the next Write and
+// then reports an error, simulating a partial in-process write.
+type shortWriter struct {
+	buf    bytes.Buffer
+	limit  int
+	failed bool
+}
+
+func (w *shortWriter) Write(p []byte) (int, error) {
+	if !w.failed && w.limit > 0 && len(p) > w.limit {
+		w.failed = true
+		n, _ := w.buf.Write(p[:w.limit])
+		return n, io.ErrShortWrite
+	}
+	return w.buf.Write(p)
+}
+
+// TestShortWriteKeepsDamageOnOneLine covers the in-process torn write: a
+// failed partial write must not swallow the entry that follows it. The
+// fragment is closed off so verification reports damage (Skipped) rather
+// than a chain break, which is what an operator needs to tell a disk
+// hiccup apart from tampering.
+func TestShortWriteKeepsDamageOnOneLine(t *testing.T) {
+	w := &shortWriter{limit: 40}
+	l := NewLedger(w, Options{})
+
+	// First write is cut short and must return an error.
+	if err := l.Log("knock", SeverityInfo, map[string]string{"user": "alice"}); err == nil {
+		t.Fatal("expected the short write to report an error")
+	}
+	// Subsequent writes succeed and must land on their own lines.
+	if err := l.Log("knock", SeverityWarn, map[string]string{"user": "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Log("knock", SeverityInfo, map[string]string{"user": "carol"}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := VerifyChain(bytes.NewReader(w.buf.Bytes()), nil)
+	if res.Err != nil {
+		t.Fatalf("a short write should degrade to skipped damage, not a chain break: %v", res.Err)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1 (the truncated fragment)", res.Skipped)
+	}
+	if res.Count != 2 {
+		t.Errorf("Count = %d, want 2 (both entries written after the failure)", res.Count)
 	}
 }
 

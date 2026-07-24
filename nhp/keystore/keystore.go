@@ -53,8 +53,11 @@ const (
 	// swap the key outright), but a hostile or corrupt blob should still
 	// not be able to drive argon2 into an enormous allocation / CPU spin
 	// on startup. These ceilings are far above any sane real setting.
-	maxArgonTime   = 16
-	maxArgonMemory = 1 << 20 // KiB => 1 GiB
+	maxArgonTime = 16
+	// 256 MiB is 4x the default and far above any sensible real setting,
+	// while still failing fast on an obviously bogus value rather than
+	// letting a corrupt blob ask for a gigabyte at startup.
+	maxArgonMemory = 256 * 1024 // KiB => 256 MiB
 
 	saltLen = 16
 
